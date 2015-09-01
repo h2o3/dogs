@@ -10,5 +10,5 @@ var server = socks.createServer((info, accept, deny) => {
 	accept();
 });
 
-server.listen(1080, '127.0.0.1')
+server.listen(1080, '127.0.0.1');
 server.useAuth(socks.auth.None());
