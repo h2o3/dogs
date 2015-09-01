@@ -1,0 +1,15 @@
+{
+	"compilerOptions": {
+		"module": "commonjs",
+		"outDir": "js",
+		"sourceMap": true
+	},
+	"files": [
+        "src/tunnel.ts",
+		"src/server.ts",
+		"src/client.ts",
+		
+		"typings/node/node.d.ts",
+		"typings/socksv5/socksv5.d.ts"
+	]
+}
