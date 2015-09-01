@@ -8,5 +8,7 @@ var server = socks.createServer(function (info, accept, deny) {
     accept();
 });
 server.listen(1080, '127.0.0.1');
-server.useAuth(socks.auth.None());
+server.useAuth(socks.auth.UserPassword(function (username, password, cb) {
+    cb(username == 'proxy' && password == 'proxypwd123');
+}));
 //# sourceMappingURL=server.js.map

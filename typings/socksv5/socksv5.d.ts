@@ -19,7 +19,7 @@ declare module "socksv5" {
 
 	interface Auth {
 		None(): AuthHandler;
-		UserPassword(callback: (user: string, password: string) => boolean): AuthHandler;
+		UserPassword(callback: (user: string, password: string, cb: (boolean) => void) => void): AuthHandler;
 	}
 	export var auth: Auth;
 }
