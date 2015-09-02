@@ -1,4 +1,8 @@
 import t = require('./tunnel');
 
 // start client
-new t.TunnelClient('127.0.0.1', 9000);
+t.connect({
+	serverHost: '127.0.0.1',
+	serverPort: 9000,
+	accessKey: 'fuckgfw'
+}).listen(9001);

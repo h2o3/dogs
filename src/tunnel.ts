@@ -3,61 +3,135 @@ import tls = require('tls');
 import fs = require('fs');
 import events = require('events');
 
-export class TunnelServer {
-    private proxyPort: number;
-    private proxyHost: string;
+export interface ServerOptions {
+    proxyHost: string;
+    proxyPort: number;
+    checkAccessKey: (key: string, cb: (pass: boolean) => any) => any;
+}
 
-    constructor(host, port) {
-        var options = {
+export interface ClientOptions {
+    serverHost: string;
+    serverPort: number;
+    accessKey: string;
+}
+
+export function createServer(options: ServerOptions) {
+    return new TunnelServer(options);
+}
+
+export function connect(options: ClientOptions) {
+    return new TunnelClient(options);
+}
+
+export class TunnelServer {
+    private options: ServerOptions;
+
+    private tlsServer: tls.Server;
+
+    constructor(options: ServerOptions) {
+        var tlsOptions = {
             key: fs.readFileSync('keys/server-key.pem'),
             cert: fs.readFileSync('keys/server-cert.pem'),
             ca: [fs.readFileSync('keys/client-cert.pem')]
         };
 
-        var server = tls.createServer(options, this.handleClient.bind(this));
-        server.listen(9000);
+        this.tlsServer = tls.createServer(tlsOptions, this.handleClient.bind(this));
 
-        this.proxyHost = host;
-        this.proxyPort = port;
+        this.options = options;
+    }
+
+    listen(port: number, host?: string) {
+        this.tlsServer.listen(port, host);
+    }
+
+    handShake(socket: tls.ClearTextStream, callback: () => any) {
+        var state = 0;
+        var chunk: Buffer;
+
+        var len: number;
+        var key: string;
+
+        var readableHandler = () => {
+            if (state == 0) {
+                if ((chunk = <Buffer>socket.read(1)) != null) {
+                    len = chunk.readUInt8(0);
+                    state = 1;
+                }
+            } else if (state == 1) {
+                if ((chunk = <Buffer>socket.read(len)) != null) {
+                    key = chunk.toString();
+                    socket.removeListener('readable', readableHandler);
+
+                    this.options.checkAccessKey(key, (pass: boolean) => {
+                        console.log('auth result: ', pass, ' with key:', key);
+
+                        if (pass) {
+                            callback();
+                        } else {
+                            socket.end();
+                        }
+                    });
+                }
+            }
+        };
+
+        socket.on('readable', readableHandler);
     }
 
     handleClient(client: tls.ClearTextStream) {
-        var proxy = net.connect(this.proxyPort, this.proxyHost, function() {
-            client.pipe(proxy);
-            proxy.pipe(client)
-        });
+        this.handShake(client, () => {
+            var proxy = net.connect(this.options.proxyPort, this.options.proxyHost, function() {
+                client.pipe(proxy);
+                proxy.pipe(client)
+            });
 
-        client.on('close', () => {
-            console.log('client connection closed');
-            proxy.end();
-        });
+            client.on('close', () => {
+                console.log('client connection closed');
+                proxy.end();
+            });
 
-        proxy.on('close', () => {
-            console.log('proxy connection closed');
-            client.end();
-        });
+            proxy.on('close', () => {
+                console.log('proxy connection closed');
+                client.end();
+            });
 
-        proxy.on('error', (e) => console.log('proxy error: ', e));
-        client.on('error', (e) => console.log('proxy error: ', e));
+            proxy.on('error', (e) => console.log('proxy error: ', e));
+            client.on('error', (e) => console.log('proxy error: ', e));
+        });
     }
 }
 
 export class TunnelClient {
-    private tunnelHost: string;
-    private tunnelPort: number;
+    private options: ClientOptions;
 
-    constructor(host, port) {
-        var server = net.createServer(this.handleClient.bind(this));
-        server.listen(9001);
+    private listenServer: net.Server;
 
-        this.tunnelHost = host;
-        this.tunnelPort = port;
+    constructor(options: ClientOptions) {
+        this.listenServer = net.createServer(this.handleClient.bind(this));
+
+        this.options = options;
+    }
+
+    listen(port: number, host?: string) {
+        this.listenServer.listen(port, host);
+    }
+
+    handShake(socket: tls.ClearTextStream, callback: () => any) {
+        var keyBuffer = new Buffer(this.options.accessKey);
+
+        var lenBuffer = new Buffer(1);
+        lenBuffer.writeUInt8(keyBuffer.length, 0);
+
+        socket.write(lenBuffer);
+        socket.write(keyBuffer);
+
+        callback();
     }
 
     handleClient(socket: net.Socket) {
         var address = socket.remoteAddress + ":" + socket.remotePort;
 
-        var tunnel = tls.connect(this.tunnelPort, this.tunnelHost, {
+        var tunnel = tls.connect(this.options.serverPort, this.options.serverHost, {
             key: fs.readFileSync('keys/client-key.pem'),
             cert: fs.readFileSync('keys/client-cert.pem'),
             ca: [fs.readFileSync('keys/server-cert.pem')],
@@ -65,8 +139,10 @@ export class TunnelClient {
                 return undefined;
             }
         }, () => {
-            socket.pipe(tunnel);
-            tunnel.pipe(socket);
+            this.handShake(tunnel, () => {
+                socket.pipe(tunnel);
+                tunnel.pipe(socket);
+            });
         });
 
         tunnel.on('close', () => {

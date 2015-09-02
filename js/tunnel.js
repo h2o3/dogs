@@ -1,47 +1,100 @@
 var net = require('net');
 var tls = require('tls');
 var fs = require('fs');
+function createServer(options) {
+    return new TunnelServer(options);
+}
+exports.createServer = createServer;
+function connect(options) {
+    return new TunnelClient(options);
+}
+exports.connect = connect;
 var TunnelServer = (function () {
-    function TunnelServer(host, port) {
-        var options = {
+    function TunnelServer(options) {
+        var tlsOptions = {
             key: fs.readFileSync('keys/server-key.pem'),
             cert: fs.readFileSync('keys/server-cert.pem'),
             ca: [fs.readFileSync('keys/client-cert.pem')]
         };
-        var server = tls.createServer(options, this.handleClient.bind(this));
-        server.listen(9000);
-        this.proxyHost = host;
-        this.proxyPort = port;
+        this.tlsServer = tls.createServer(tlsOptions, this.handleClient.bind(this));
+        this.options = options;
     }
+    TunnelServer.prototype.listen = function (port, host) {
+        this.tlsServer.listen(port, host);
+    };
+    TunnelServer.prototype.handShake = function (socket, callback) {
+        var _this = this;
+        var state = 0;
+        var chunk;
+        var len;
+        var key;
+        var readableHandler = function () {
+            if (state == 0) {
+                if ((chunk = socket.read(1)) != null) {
+                    len = chunk.readUInt8(0);
+                    state = 1;
+                }
+            }
+            else if (state == 1) {
+                if ((chunk = socket.read(len)) != null) {
+                    key = chunk.toString();
+                    socket.removeListener('readable', readableHandler);
+                    _this.options.checkAccessKey(key, function (pass) {
+                        console.log('auth result: ', pass, ' with key:', key);
+                        if (pass) {
+                            callback();
+                        }
+                        else {
+                            socket.end();
+                        }
+                    });
+                }
+            }
+        };
+        socket.on('readable', readableHandler);
+    };
     TunnelServer.prototype.handleClient = function (client) {
-        var proxy = net.connect(this.proxyPort, this.proxyHost, function () {
-            client.pipe(proxy);
-            proxy.pipe(client);
+        var _this = this;
+        this.handShake(client, function () {
+            var proxy = net.connect(_this.options.proxyPort, _this.options.proxyHost, function () {
+                client.pipe(proxy);
+                proxy.pipe(client);
+            });
+            client.on('close', function () {
+                console.log('client connection closed');
+                proxy.end();
+            });
+            proxy.on('close', function () {
+                console.log('proxy connection closed');
+                client.end();
+            });
+            proxy.on('error', function (e) { return console.log('proxy error: ', e); });
+            client.on('error', function (e) { return console.log('proxy error: ', e); });
         });
-        client.on('close', function () {
-            console.log('client connection closed');
-            proxy.end();
-        });
-        proxy.on('close', function () {
-            console.log('proxy connection closed');
-            client.end();
-        });
-        proxy.on('error', function (e) { return console.log('proxy error: ', e); });
-        client.on('error', function (e) { return console.log('proxy error: ', e); });
     };
     return TunnelServer;
 })();
 exports.TunnelServer = TunnelServer;
 var TunnelClient = (function () {
-    function TunnelClient(host, port) {
-        var server = net.createServer(this.handleClient.bind(this));
-        server.listen(9001);
-        this.tunnelHost = host;
-        this.tunnelPort = port;
+    function TunnelClient(options) {
+        this.listenServer = net.createServer(this.handleClient.bind(this));
+        this.options = options;
     }
+    TunnelClient.prototype.listen = function (port, host) {
+        this.listenServer.listen(port, host);
+    };
+    TunnelClient.prototype.handShake = function (socket, callback) {
+        var keyBuffer = new Buffer(this.options.accessKey);
+        var lenBuffer = new Buffer(1);
+        lenBuffer.writeUInt8(keyBuffer.length, 0);
+        socket.write(lenBuffer);
+        socket.write(keyBuffer);
+        callback();
+    };
     TunnelClient.prototype.handleClient = function (socket) {
+        var _this = this;
         var address = socket.remoteAddress + ":" + socket.remotePort;
-        var tunnel = tls.connect(this.tunnelPort, this.tunnelHost, {
+        var tunnel = tls.connect(this.options.serverPort, this.options.serverHost, {
             key: fs.readFileSync('keys/client-key.pem'),
             cert: fs.readFileSync('keys/client-cert.pem'),
             ca: [fs.readFileSync('keys/server-cert.pem')],
@@ -49,8 +102,10 @@ var TunnelClient = (function () {
                 return undefined;
             }
         }, function () {
-            socket.pipe(tunnel);
-            tunnel.pipe(socket);
+            _this.handShake(tunnel, function () {
+                socket.pipe(tunnel);
+                tunnel.pipe(socket);
+            });
         });
         tunnel.on('close', function () {
             console.log('tunnel for [' + address + '] disconnected');
