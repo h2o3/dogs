@@ -87,8 +87,7 @@ var TunnelClient = (function () {
         var keyBuffer = new Buffer(this.options.accessKey);
         var lenBuffer = new Buffer(1);
         lenBuffer.writeUInt8(keyBuffer.length, 0);
-        socket.write(lenBuffer);
-        socket.write(keyBuffer);
+        socket.write(Buffer.concat([lenBuffer, keyBuffer]));
         callback();
     };
     TunnelClient.prototype.handleClient = function (socket) {

@@ -123,8 +123,7 @@ export class TunnelClient {
         var lenBuffer = new Buffer(1);
         lenBuffer.writeUInt8(keyBuffer.length, 0);
 
-        socket.write(lenBuffer);
-        socket.write(keyBuffer);
+        socket.write(Buffer.concat([lenBuffer, keyBuffer]));
 
         callback();
     }
