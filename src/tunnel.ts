@@ -1,7 +1,4 @@
 import net = require('net');
-import tls = require('tls');
-import fs = require('fs');
-import events = require('events');
 
 export interface ServerOptions {
     proxyHost: string;
@@ -26,25 +23,19 @@ export function connect(options: ClientOptions) {
 export class TunnelServer {
     private options: ServerOptions;
 
-    private tlsServer: tls.Server;
+    private server: net.Server;
 
     constructor(options: ServerOptions) {
-        var tlsOptions = {
-            key: fs.readFileSync('keys/server-key.pem'),
-            cert: fs.readFileSync('keys/server-cert.pem'),
-            ca: [fs.readFileSync('keys/client-cert.pem')]
-        };
-
-        this.tlsServer = tls.createServer(tlsOptions, this.handleClient.bind(this));
+        this.server = net.createServer(this.handleClient.bind(this));
 
         this.options = options;
     }
 
     listen(port: number, host?: string) {
-        this.tlsServer.listen(port, host);
+        this.server.listen(port, host);
     }
 
-    handShake(socket: tls.ClearTextStream, callback: () => any) {
+    handShake(socket: net.Socket, callback: () => any) {
         var state = 0;
         var chunk: Buffer;
 
@@ -52,50 +43,57 @@ export class TunnelServer {
         var key: string;
 
         var readableHandler = () => {
+            // read length of key
             if (state == 0) {
                 if ((chunk = <Buffer>socket.read(1)) != null) {
                     len = chunk.readUInt8(0);
                     state = 1;
                 }
-            } else if (state == 1) {
+            }
+            
+            // read the key
+            if (state == 1) {
                 if ((chunk = <Buffer>socket.read(len)) != null) {
                     key = chunk.toString();
-                    socket.removeListener('readable', readableHandler);
-
-                    this.options.checkAccessKey(key, (pass: boolean) => {
-                        console.log('auth result: ', pass, ' with key:', key);
-
-                        if (pass) {
-                            callback();
-                        } else {
-                            socket.end();
-                        }
-                    });
+                    state = 2;
                 }
+            }
+            
+            // verify key and finish handshake
+            if (state == 2) {
+                socket.removeListener('readable', readableHandler);
+
+                this.options.checkAccessKey(key, (pass: boolean) => {
+                    console.log('auth result: ', pass, ' with key:', key);
+
+                    if (pass) {
+                        callback();
+                    } else {
+                        socket.end();
+                    }
+                });
             }
         };
 
         socket.on('readable', readableHandler);
     }
 
-    handleClient(client: tls.ClearTextStream) {
+    handleClient(client: net.Socket) {
         client.on('error', (e) => console.log('proxy error: ', e));
 
         this.handShake(client, () => {
-            var proxy = net.connect(this.options.proxyPort, this.options.proxyHost, function() {
+            var proxy = net.connect(this.options.proxyPort, this.options.proxyHost, () => {
+                proxy.pipe(client);
                 client.pipe(proxy);
-                proxy.pipe(client)
             });
 
             proxy.on('error', (e) => console.log('proxy error: ', e));
 
             client.on('close', () => {
-                console.log('client connection closed');
                 proxy.end();
             });
 
             proxy.on('close', () => {
-                console.log('proxy connection closed');
                 client.end();
             });
         });
@@ -117,7 +115,7 @@ export class TunnelClient {
         this.listenServer.listen(port, host);
     }
 
-    handShake(socket: tls.ClearTextStream, callback: () => any) {
+    handShake(socket: net.Socket, callback: () => any) {
         var keyBuffer = new Buffer(this.options.accessKey);
 
         var lenBuffer = new Buffer(1);
@@ -131,14 +129,7 @@ export class TunnelClient {
     handleClient(socket: net.Socket) {
         var address = socket.remoteAddress + ":" + socket.remotePort;
 
-        var tunnel = tls.connect(this.options.serverPort, this.options.serverHost, {
-            key: fs.readFileSync('keys/client-key.pem'),
-            cert: fs.readFileSync('keys/client-cert.pem'),
-            ca: [fs.readFileSync('keys/server-cert.pem')],
-            checkServerIdentity: function(host, cert) {
-                return undefined;
-            }
-        }, () => {
+        var tunnel = net.connect(this.options.serverPort, this.options.serverHost, () => {
             this.handShake(tunnel, () => {
                 socket.pipe(tunnel);
                 tunnel.pipe(socket);
@@ -146,12 +137,10 @@ export class TunnelClient {
         });
 
         tunnel.on('close', () => {
-            console.log('tunnel for [' + address + '] disconnected');
             socket.end();
         });
 
         socket.on('close', () => {
-            console.log('connection [' + address + '] disconnected');
             tunnel.end();
         });
 
