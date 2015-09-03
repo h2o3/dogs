@@ -4,5 +4,6 @@ import t = require('./tunnel');
 t.connect({
 	serverHost: '127.0.0.1',
 	serverPort: 9000,
-	accessKey: 'helloworld'
+	accessKey: 'helloworld',
+	password: 'anythingwhichisusedtoencryptthepackets'
 }).listen(9001);

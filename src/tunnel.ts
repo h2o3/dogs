@@ -1,15 +1,17 @@
 import net = require('net');
+import secure = require('./secure');
 
 export interface ServerOptions {
     proxyHost: string;
     proxyPort: number;
-    checkAccessKey: (key: string, cb: (pass: boolean) => any) => any;
+    checkAccessKey: (key: string, cb: (pass: boolean, password?: string) => any) => any;
 }
 
 export interface ClientOptions {
     serverHost: string;
     serverPort: number;
     accessKey: string;
+    password: string;
 }
 
 export function createServer(options: ServerOptions) {
@@ -35,7 +37,7 @@ export class TunnelServer {
         this.server.listen(port, host);
     }
 
-    handShake(socket: net.Socket, callback: () => any) {
+    protected handShake(socket: net.Socket, callback: (password: string) => any) {
         var state = 0;
         var chunk: Buffer;
 
@@ -63,11 +65,11 @@ export class TunnelServer {
             if (state == 2) {
                 socket.removeListener('readable', readableHandler);
 
-                this.options.checkAccessKey(key, (pass: boolean) => {
+                this.options.checkAccessKey(key, (pass: boolean, password?: string) => {
                     console.log('auth result: ', pass, ' with key:', key);
 
                     if (pass) {
-                        callback();
+                        callback(password);
                     } else {
                         socket.end();
                     }
@@ -78,13 +80,16 @@ export class TunnelServer {
         socket.on('readable', readableHandler);
     }
 
-    handleClient(client: net.Socket) {
+    protected handleClient(client: net.Socket) {
         client.on('error', (e) => console.log('proxy error: ', e));
 
-        this.handShake(client, () => {
+        this.handShake(client, (password) => {
             var proxy = net.connect(this.options.proxyPort, this.options.proxyHost, () => {
-                proxy.pipe(client);
-                client.pipe(proxy);
+                var cipher = new secure.EncryptStream(password);
+                var decipher = new secure.DecryptStream(password);
+
+                proxy.pipe(cipher).pipe(client);
+                client.pipe(decipher).pipe(proxy);
             });
 
             proxy.on('error', (e) => console.log('proxy error: ', e));
@@ -115,7 +120,7 @@ export class TunnelClient {
         this.listenServer.listen(port, host);
     }
 
-    handShake(socket: net.Socket, callback: () => any) {
+    protected handShake(socket: net.Socket, callback: () => any) {
         var keyBuffer = new Buffer(this.options.accessKey);
 
         var lenBuffer = new Buffer(1);
@@ -126,13 +131,16 @@ export class TunnelClient {
         callback();
     }
 
-    handleClient(socket: net.Socket) {
+    protected handleClient(socket: net.Socket) {
         var address = socket.remoteAddress + ":" + socket.remotePort;
 
         var tunnel = net.connect(this.options.serverPort, this.options.serverHost, () => {
             this.handShake(tunnel, () => {
-                socket.pipe(tunnel);
-                tunnel.pipe(socket);
+                var cipher = new secure.EncryptStream(this.options.password);
+                var decipher = new secure.DecryptStream(this.options.password);
+
+                socket.pipe(cipher).pipe(tunnel);
+                tunnel.pipe(decipher).pipe(socket);
             });
         });
 

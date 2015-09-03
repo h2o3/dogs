@@ -6,7 +6,7 @@ t.createServer({
 	proxyHost: '127.0.0.1',
 	proxyPort: 1080,
 	checkAccessKey: (key, cb) => {
-		cb(key == 'helloworld');
+		cb(key == 'helloworld', 'anythingwhichisusedtoencryptthepackets');
 	}
 }).listen(9000);
 

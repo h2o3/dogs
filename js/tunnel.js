@@ -1,4 +1,5 @@
 var net = require('net');
+var secure = require('./secure');
 function createServer(options) {
     return new TunnelServer(options);
 }
@@ -39,10 +40,10 @@ var TunnelServer = (function () {
             // verify key and finish handshake
             if (state == 2) {
                 socket.removeListener('readable', readableHandler);
-                _this.options.checkAccessKey(key, function (pass) {
+                _this.options.checkAccessKey(key, function (pass, password) {
                     console.log('auth result: ', pass, ' with key:', key);
                     if (pass) {
-                        callback();
+                        callback(password);
                     }
                     else {
                         socket.end();
@@ -55,10 +56,12 @@ var TunnelServer = (function () {
     TunnelServer.prototype.handleClient = function (client) {
         var _this = this;
         client.on('error', function (e) { return console.log('proxy error: ', e); });
-        this.handShake(client, function () {
+        this.handShake(client, function (password) {
             var proxy = net.connect(_this.options.proxyPort, _this.options.proxyHost, function () {
-                proxy.pipe(client);
-                client.pipe(proxy);
+                var cipher = new secure.EncryptStream(password);
+                var decipher = new secure.DecryptStream(password);
+                proxy.pipe(cipher).pipe(client);
+                client.pipe(decipher).pipe(proxy);
             });
             proxy.on('error', function (e) { return console.log('proxy error: ', e); });
             client.on('close', function () {
@@ -92,8 +95,10 @@ var TunnelClient = (function () {
         var address = socket.remoteAddress + ":" + socket.remotePort;
         var tunnel = net.connect(this.options.serverPort, this.options.serverHost, function () {
             _this.handShake(tunnel, function () {
-                socket.pipe(tunnel);
-                tunnel.pipe(socket);
+                var cipher = new secure.EncryptStream(_this.options.password);
+                var decipher = new secure.DecryptStream(_this.options.password);
+                socket.pipe(cipher).pipe(tunnel);
+                tunnel.pipe(decipher).pipe(socket);
             });
         });
         tunnel.on('close', function () {
