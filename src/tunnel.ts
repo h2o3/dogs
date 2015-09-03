@@ -79,11 +79,15 @@ export class TunnelServer {
     }
 
     handleClient(client: tls.ClearTextStream) {
+        client.on('error', (e) => console.log('proxy error: ', e));
+
         this.handShake(client, () => {
             var proxy = net.connect(this.options.proxyPort, this.options.proxyHost, function() {
                 client.pipe(proxy);
                 proxy.pipe(client)
             });
+
+            proxy.on('error', (e) => console.log('proxy error: ', e));
 
             client.on('close', () => {
                 console.log('client connection closed');
@@ -94,9 +98,6 @@ export class TunnelServer {
                 console.log('proxy connection closed');
                 client.end();
             });
-
-            proxy.on('error', (e) => console.log('proxy error: ', e));
-            client.on('error', (e) => console.log('proxy error: ', e));
         });
     }
 }

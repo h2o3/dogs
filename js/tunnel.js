@@ -55,11 +55,13 @@ var TunnelServer = (function () {
     };
     TunnelServer.prototype.handleClient = function (client) {
         var _this = this;
+        client.on('error', function (e) { return console.log('proxy error: ', e); });
         this.handShake(client, function () {
             var proxy = net.connect(_this.options.proxyPort, _this.options.proxyHost, function () {
                 client.pipe(proxy);
                 proxy.pipe(client);
             });
+            proxy.on('error', function (e) { return console.log('proxy error: ', e); });
             client.on('close', function () {
                 console.log('client connection closed');
                 proxy.end();
@@ -68,8 +70,6 @@ var TunnelServer = (function () {
                 console.log('proxy connection closed');
                 client.end();
             });
-            proxy.on('error', function (e) { return console.log('proxy error: ', e); });
-            client.on('error', function (e) { return console.log('proxy error: ', e); });
         });
     };
     return TunnelServer;
