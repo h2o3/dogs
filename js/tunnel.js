@@ -1,5 +1,12 @@
 var net = require('net');
+var http = require('http');
 var secure = require('./secure');
+var reader = require('./reader');
+(function (Transport) {
+    Transport[Transport["TCP"] = 0] = "TCP";
+    Transport[Transport["HTTP"] = 1] = "HTTP";
+})(exports.Transport || (exports.Transport = {}));
+var Transport = exports.Transport;
 function createServer(options) {
     return new TunnelServer(options);
 }
@@ -10,66 +17,88 @@ function connect(options) {
 exports.connect = connect;
 var TunnelServer = (function () {
     function TunnelServer(options) {
-        this.server = net.createServer(this.handleClient.bind(this));
         this.options = options;
+        this.initTransport();
     }
-    TunnelServer.prototype.listen = function (port, host) {
-        this.server.listen(port, host);
-    };
-    TunnelServer.prototype.handShake = function (socket, callback) {
+    TunnelServer.prototype.initTransport = function () {
         var _this = this;
-        var state = 0;
-        var chunk;
+        if (this.options.transport == Transport.TCP) {
+            this.server = net.createServer(function (socket) {
+                _this.handleClient(socket, socket);
+            });
+        }
+        else {
+            this.server = http.createServer(function (req, resp) {
+                resp.writeHead(200, { 'content-type': 'application/stream' });
+                _this.handleClient(req, resp);
+            });
+        }
+    };
+    TunnelServer.prototype.listen = function (port, host) {
+        this.server.listen.call(this.server, port, host);
+    };
+    TunnelServer.prototype.handShake = function (upstream, downstream, callback) {
+        var _this = this;
         var len;
         var key;
-        var readableHandler = function () {
-            // read length of key
-            if (state == 0) {
-                if ((chunk = socket.read(1)) != null) {
-                    len = chunk.readUInt8(0);
-                    state = 1;
+        var consumer = new reader.Reader();
+        var consumeSpec = [
+            {
+                state: 0,
+                target: 1,
+                count: function () { return 1; },
+                action: function (buffer) {
+                    len = buffer.readUInt8(0);
+                }
+            },
+            {
+                state: 1,
+                target: 2,
+                count: function () { return len; },
+                action: function (buffer) {
+                    key = buffer.slice(0, len).toString();
+                }
+            },
+            {
+                state: 2,
+                target: 3,
+                count: function () { return 0; },
+                action: function (buffer) {
+                    upstream.removeListener('readable', dataHandler);
+                    upstream.unshift(consumer.remain());
+                    _this.options.checkAccessKey(key, function (pass, password) {
+                        console.log('auth result: ', pass, ' with key:', key);
+                        if (pass) {
+                            callback(consumer.remain(), password);
+                        }
+                        else {
+                            downstream.end();
+                        }
+                    });
                 }
             }
-            // read the key
-            if (state == 1) {
-                if ((chunk = socket.read(len)) != null) {
-                    key = chunk.toString();
-                    state = 2;
-                }
-            }
-            // verify key and finish handshake
-            if (state == 2) {
-                socket.removeListener('readable', readableHandler);
-                _this.options.checkAccessKey(key, function (pass, password) {
-                    console.log('auth result: ', pass, ' with key:', key);
-                    if (pass) {
-                        callback(password);
-                    }
-                    else {
-                        socket.end();
-                    }
-                });
-            }
+        ];
+        var dataHandler = function () {
+            var data = upstream.read();
+            consumer.feed(data);
+            consumer.consumeAll(consumeSpec);
         };
-        socket.on('readable', readableHandler);
+        upstream.on('readable', dataHandler);
     };
-    TunnelServer.prototype.handleClient = function (client) {
+    TunnelServer.prototype.handleClient = function (upstream, downstream) {
         var _this = this;
-        client.on('error', function (e) { return console.log('proxy error: ', e); });
-        this.handShake(client, function (password) {
+        upstream.on('error', function (e) { return console.log('upstream error:', e); });
+        downstream.on('error', function (e) { return console.log('downstream error:', e); });
+        this.handShake(upstream, downstream, function (remain, password) {
+            var cipher = new secure.EncryptStream(password);
+            var decipher = new secure.DecryptStream(password);
             var proxy = net.connect(_this.options.proxyPort, _this.options.proxyHost, function () {
-                var cipher = new secure.EncryptStream(password);
-                var decipher = new secure.DecryptStream(password);
-                proxy.pipe(cipher).pipe(client);
-                client.pipe(decipher).pipe(proxy);
+                proxy.pipe(cipher).pipe(downstream);
+                upstream.pipe(decipher).pipe(proxy);
             });
+            upstream.on('close', function () { return proxy.end(); });
+            proxy.on('close', function () { return downstream.end(); });
             proxy.on('error', function (e) { return console.log('proxy error: ', e); });
-            client.on('close', function () {
-                proxy.end();
-            });
-            proxy.on('close', function () {
-                client.end();
-            });
         });
     };
     return TunnelServer;
@@ -83,32 +112,50 @@ var TunnelClient = (function () {
     TunnelClient.prototype.listen = function (port, host) {
         this.listenServer.listen(port, host);
     };
-    TunnelClient.prototype.handShake = function (socket, callback) {
+    TunnelClient.prototype.handShake = function (upstream, callback) {
         var keyBuffer = new Buffer(this.options.accessKey);
         var lenBuffer = new Buffer(1);
         lenBuffer.writeUInt8(keyBuffer.length, 0);
-        socket.write(Buffer.concat([lenBuffer, keyBuffer]));
+        upstream.write(Buffer.concat([lenBuffer, keyBuffer]));
         callback();
     };
-    TunnelClient.prototype.handleClient = function (socket) {
+    TunnelClient.prototype.bindTransport = function (socket) {
         var _this = this;
-        var address = socket.remoteAddress + ":" + socket.remotePort;
-        var tunnel = net.connect(this.options.serverPort, this.options.serverHost, function () {
-            _this.handShake(tunnel, function () {
-                var cipher = new secure.EncryptStream(_this.options.password);
-                var decipher = new secure.DecryptStream(_this.options.password);
-                socket.pipe(cipher).pipe(tunnel);
-                tunnel.pipe(decipher).pipe(socket);
+        if (this.options.transport == Transport.TCP) {
+            var tunnel = net.connect(this.options.serverPort, this.options.serverHost, function () {
+                _this.handShake(tunnel, function () {
+                    var cipher = new secure.EncryptStream(_this.options.password);
+                    var decipher = new secure.DecryptStream(_this.options.password);
+                    socket.pipe(cipher).pipe(tunnel);
+                    tunnel.pipe(decipher).pipe(socket);
+                });
             });
-        });
-        tunnel.on('close', function () {
-            socket.end();
-        });
-        socket.on('close', function () {
-            tunnel.end();
-        });
-        tunnel.on('error', function (e) { return console.log('tunnel for [' + address + '] error: ', e); });
-        socket.on('error', function (e) { return console.log('tunnel for [' + address + '] error: ', e); });
+            return tunnel;
+        }
+        else {
+            var cipher = new secure.EncryptStream(this.options.password);
+            var decipher = new secure.DecryptStream(this.options.password);
+            var request = http.request({
+                host: this.options.serverHost,
+                port: this.options.serverPort,
+                method: 'POST'
+            }, function (resp) {
+                resp.on('error', function (e) { return console.log('downstream error:', e); });
+                resp.pipe(decipher).pipe(socket);
+            });
+            this.handShake(request, function () {
+                socket.pipe(cipher).pipe(request);
+            });
+            return request;
+        }
+    };
+    TunnelClient.prototype.handleClient = function (socket) {
+        var address = socket.remoteAddress + ":" + socket.remotePort;
+        var upstream = this.bindTransport(socket);
+        upstream.on('close', function () { return socket.end(); });
+        socket.on('close', function () { return upstream.end(); });
+        upstream.on('error', function (e) { return console.log('upstream for [' + address + '] error:', e); });
+        socket.on('error', function (e) { return console.log('socket @ [' + address + '] error:', e); });
     };
     return TunnelClient;
 })();

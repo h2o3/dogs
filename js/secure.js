@@ -6,6 +6,7 @@ var __extends = (this && this.__extends) || function (d, b) {
 };
 var crypto = require('crypto');
 var stream = require('stream');
+var reader = require('./reader');
 var ALGORITHM = 'aes-256-cbc';
 var EncryptStream = (function (_super) {
     __extends(EncryptStream, _super);
@@ -38,9 +39,7 @@ var DecryptStream = (function (_super) {
     __extends(DecryptStream, _super);
     function DecryptStream(password) {
         _super.call(this);
-        this.buffers = [];
-        this.buffered = 0;
-        this.state = 0;
+        this.reader = new reader.Reader();
         this.password = password;
     }
     DecryptStream.prototype._transform = function (data, enc, callback) {
@@ -52,45 +51,44 @@ var DecryptStream = (function (_super) {
         else {
             chunk = new Buffer(data);
         }
-        this.buffers.push(chunk);
-        this.buffered += chunk.length;
-        while (true) {
-            if (this.state == 0) {
-                if (!this.consumeBuffer(4, function (buffer) {
-                    return _this.packetLength = buffer.readUInt32BE(0);
-                }))
-                    break;
-                this.state = 1;
+        this.reader.feed(chunk);
+        this.reader.consumeAll([
+            {
+                state: 0,
+                target: 1,
+                count: function () { return 4; },
+                action: function (buffer) {
+                    _this.packetLength = buffer.readUInt32BE(0);
+                }
+            },
+            {
+                state: 1,
+                target: 2,
+                count: function () { return _this.packetLength; },
+                action: function (buffer) {
+                    _this.packetBody = buffer.slice(0, _this.packetLength);
+                }
+            },
+            {
+                state: 2,
+                target: 0,
+                count: function () { return 0; },
+                action: function (buffer) {
+                    var decipher = crypto.createDecipher(ALGORITHM, _this.password);
+                    try {
+                        var decrypted = decipher.update(_this.packetBody);
+                        var finalDecrypted = decipher.final();
+                        _this.push(decrypted);
+                        _this.push(finalDecrypted);
+                    }
+                    catch (e) {
+                        console.error('decrypt error:', e);
+                        _this.end();
+                    }
+                }
             }
-            if (this.state == 1) {
-                if (!this.consumeBuffer(this.packetLength, function (buffer) {
-                    return _this.packetBody = buffer.slice(0, _this.packetLength);
-                }))
-                    break;
-                this.state = 2;
-            }
-            if (this.state == 2) {
-                var decipher = crypto.createDecipher(ALGORITHM, this.password);
-                var decrypted = decipher.update(this.packetBody);
-                var finalDecrypted = decipher.final();
-                this.push(decrypted);
-                this.push(finalDecrypted);
-                this.state = 0;
-            }
-        }
+        ]);
         callback();
-    };
-    DecryptStream.prototype.consumeBuffer = function (size, action) {
-        if (this.buffered >= size) {
-            var buffer = Buffer.concat(this.buffers);
-            action(buffer);
-            this.buffered -= size;
-            this.buffers = [buffer.slice(size)];
-            return true;
-        }
-        else {
-            return false;
-        }
     };
     return DecryptStream;
 })(stream.Transform);

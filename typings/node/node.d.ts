@@ -481,6 +481,8 @@ declare module "http" {
         setTimeout(timeout: number, callback?: Function): void;
         setNoDelay(noDelay?: boolean): void;
         setSocketKeepAlive(enable?: boolean, initialDelay?: number): void;
+        
+        flushHeaders();
 
         // Extended base methods
         end(): void;
@@ -1622,12 +1624,12 @@ declare module "crypto" {
         setAutoPadding(auto_padding: boolean): void;
     }
     export function createSign(algorithm: string): Signer;
-    interface Signer {
+    interface Signer extends NodeJS.WritableStream {
         update(data: any): void;
         sign(private_key: string, output_format: string): string;
     }
     export function createVerify(algorith: string): Verify;
-    interface Verify {
+    interface Verify extends NodeJS.WritableStream {
         update(data: any): void;
         verify(object: string, signature: string, signature_format?: string): boolean;
     }

@@ -1,15 +1,24 @@
 import net = require('net');
+import http = require('http');
+import stream = require('stream');
 import secure = require('./secure');
+import reader = require('./reader');
+
+export enum Transport {
+    TCP, HTTP
+}
 
 export interface ServerOptions {
     proxyHost: string;
     proxyPort: number;
+    transport: Transport;
     checkAccessKey: (key: string, cb: (pass: boolean, password?: string) => any) => any;
 }
 
 export interface ClientOptions {
     serverHost: string;
     serverPort: number;
+    transport: Transport;
     accessKey: string;
     password: string;
 }
@@ -25,82 +34,99 @@ export function connect(options: ClientOptions) {
 export class TunnelServer {
     private options: ServerOptions;
 
-    private server: net.Server;
+    private server: net.Server|http.Server;
 
     constructor(options: ServerOptions) {
-        this.server = net.createServer(this.handleClient.bind(this));
-
         this.options = options;
+        this.initTransport();
+    }
+
+    protected initTransport(): void {
+        if (this.options.transport == Transport.TCP) {
+            this.server = net.createServer((socket) => {
+                this.handleClient(socket, socket);
+            });
+        } else {
+            this.server = http.createServer((req, resp) => {
+                resp.writeHead(200, { 'content-type': 'application/stream' });
+
+                this.handleClient(req, resp);
+            });
+        }
     }
 
     listen(port: number, host?: string) {
-        this.server.listen(port, host);
+        this.server.listen.call(this.server, port, host);
     }
 
-    protected handShake(socket: net.Socket, callback: (password: string) => any) {
-        var state = 0;
-        var chunk: Buffer;
-
+    protected handShake(upstream: stream.Readable, downstream: stream.Writable, callback: (remain: Buffer, password: string) => any) {
         var len: number;
         var key: string;
 
-        var readableHandler = () => {
-            // read length of key
-            if (state == 0) {
-                if ((chunk = <Buffer>socket.read(1)) != null) {
-                    len = chunk.readUInt8(0);
-                    state = 1;
+        var consumer = new reader.Reader();
+        var consumeSpec = [
+            {
+                state: 0,
+                target: 1,
+                count: () => 1,
+                action: (buffer?: Buffer) => {
+                    len = buffer.readUInt8(0);
+                }
+            },
+            {
+                state: 1,
+                target: 2,
+                count: () => len,
+                action: (buffer?: Buffer) => {
+                    key = buffer.slice(0, len).toString();
+                }
+            },
+            {
+                state: 2,
+                target: 3,
+                count: () => 0,
+                action: (buffer?: Buffer) => {
+                    upstream.removeListener('readable', dataHandler);
+                    upstream.unshift(consumer.remain());
+                    
+                    this.options.checkAccessKey(key, (pass: boolean, password?: string) => {
+                        console.log('auth result: ', pass, ' with key:', key);
+
+                        if (pass) {
+                            callback(consumer.remain(), password);
+                        } else {
+                            downstream.end();
+                        }
+                    });
                 }
             }
-            
-            // read the key
-            if (state == 1) {
-                if ((chunk = <Buffer>socket.read(len)) != null) {
-                    key = chunk.toString();
-                    state = 2;
-                }
-            }
-            
-            // verify key and finish handshake
-            if (state == 2) {
-                socket.removeListener('readable', readableHandler);
+        ];
 
-                this.options.checkAccessKey(key, (pass: boolean, password?: string) => {
-                    console.log('auth result: ', pass, ' with key:', key);
-
-                    if (pass) {
-                        callback(password);
-                    } else {
-                        socket.end();
-                    }
-                });
-            }
+        var dataHandler = () => {
+            var data = <Buffer>upstream.read();
+            consumer.feed(data);
+            consumer.consumeAll(consumeSpec);
         };
 
-        socket.on('readable', readableHandler);
+        upstream.on('readable', dataHandler);
     }
 
-    protected handleClient(client: net.Socket) {
-        client.on('error', (e) => console.log('proxy error: ', e));
+    protected handleClient(upstream: stream.Readable, downstream: stream.Writable) {
+        upstream.on('error', (e) => console.log('upstream error:', e));
+        downstream.on('error', (e) => console.log('downstream error:', e))
 
-        this.handShake(client, (password) => {
+        this.handShake(upstream, downstream, (remain, password) => {
+            var cipher = new secure.EncryptStream(password);
+            var decipher = new secure.DecryptStream(password);
+            
             var proxy = net.connect(this.options.proxyPort, this.options.proxyHost, () => {
-                var cipher = new secure.EncryptStream(password);
-                var decipher = new secure.DecryptStream(password);
-
-                proxy.pipe(cipher).pipe(client);
-                client.pipe(decipher).pipe(proxy);
+                proxy.pipe(cipher).pipe(downstream);
+                upstream.pipe(decipher).pipe(proxy);
             });
 
+            upstream.on('close', () => proxy.end());
+            proxy.on('close', () => downstream.end());
             proxy.on('error', (e) => console.log('proxy error: ', e));
-
-            client.on('close', () => {
-                proxy.end();
-            });
-
-            proxy.on('close', () => {
-                client.end();
-            });
         });
     }
 }
@@ -120,39 +146,58 @@ export class TunnelClient {
         this.listenServer.listen(port, host);
     }
 
-    protected handShake(socket: net.Socket, callback: () => any) {
+    protected handShake(upstream: stream.Writable, callback: () => any) {
         var keyBuffer = new Buffer(this.options.accessKey);
 
         var lenBuffer = new Buffer(1);
         lenBuffer.writeUInt8(keyBuffer.length, 0);
 
-        socket.write(Buffer.concat([lenBuffer, keyBuffer]));
+        upstream.write(Buffer.concat([lenBuffer, keyBuffer]));
 
         callback();
+    }
+
+    protected bindTransport(socket: net.Socket): stream.Writable {
+        if (this.options.transport == Transport.TCP) {
+            var tunnel = net.connect(this.options.serverPort, this.options.serverHost, () => {
+                this.handShake(tunnel, () => {
+                    var cipher = new secure.EncryptStream(this.options.password);
+                    var decipher = new secure.DecryptStream(this.options.password);
+
+                    socket.pipe(cipher).pipe(tunnel);
+                    tunnel.pipe(decipher).pipe(socket);
+                });
+            });
+            return tunnel;
+        } else {
+            var cipher = new secure.EncryptStream(this.options.password);
+            var decipher = new secure.DecryptStream(this.options.password);
+
+            var request = http.request({
+                host: this.options.serverHost,
+                port: this.options.serverPort,
+                method: 'POST'
+            }, (resp) => {
+                resp.on('error', (e) => console.log('downstream error:', e));
+                resp.pipe(decipher).pipe(socket);
+            });
+
+            this.handShake(request, () => {
+                socket.pipe(cipher).pipe(request);
+            });
+
+            return request;
+        }
     }
 
     protected handleClient(socket: net.Socket) {
         var address = socket.remoteAddress + ":" + socket.remotePort;
 
-        var tunnel = net.connect(this.options.serverPort, this.options.serverHost, () => {
-            this.handShake(tunnel, () => {
-                var cipher = new secure.EncryptStream(this.options.password);
-                var decipher = new secure.DecryptStream(this.options.password);
+        var upstream = this.bindTransport(socket);
 
-                socket.pipe(cipher).pipe(tunnel);
-                tunnel.pipe(decipher).pipe(socket);
-            });
-        });
-
-        tunnel.on('close', () => {
-            socket.end();
-        });
-
-        socket.on('close', () => {
-            tunnel.end();
-        });
-
-        tunnel.on('error', (e) => console.log('tunnel for [' + address + '] error: ', e));
-        socket.on('error', (e) => console.log('tunnel for [' + address + '] error: ', e));
+        upstream.on('close', () => socket.end());
+        socket.on('close', () => upstream.end());
+        upstream.on('error', (e) => console.log('upstream for [' + address + '] error:', e));
+        socket.on('error', (e) => console.log('socket @ [' + address + '] error:', e));
     }
 }

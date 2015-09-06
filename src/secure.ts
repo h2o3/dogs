@@ -1,5 +1,6 @@
 import crypto = require('crypto');
 import stream = require('stream');
+import reader = require('./reader');
 
 var ALGORITHM = 'aes-256-cbc';
 
@@ -31,7 +32,7 @@ export class EncryptStream extends stream.Transform {
 		this.push(lenBuffer);
 		this.push(encrypted);
 		this.push(finalEncrypted);
-		
+
 		callback();
 	}
 }
@@ -39,12 +40,10 @@ export class EncryptStream extends stream.Transform {
 export class DecryptStream extends stream.Transform {
 	private password: string;
 
-	private buffers: Array<Buffer> = [];
-	private buffered: number = 0;
-
-	private state: number = 0;
 	private packetLength: number;
 	private packetBody: Buffer;
+
+	private reader: reader.Reader = new reader.Reader();
 
 	constructor(password) {
 		super();
@@ -60,51 +59,46 @@ export class DecryptStream extends stream.Transform {
 			chunk = new Buffer(<string>data);
 		}
 
-		this.buffers.push(chunk);
-		this.buffered += chunk.length;
+		this.reader.feed(chunk);
 
-		while (true) {
-			if (this.state == 0) {
-				if (!this.consumeBuffer(4, buffer =>
-					this.packetLength = buffer.readUInt32BE(0)
-					)) break;
-				this.state = 1;
+		this.reader.consumeAll([
+			{
+				state: 0,
+				target: 1,
+				count: () => 4,
+				action: (buffer?: Buffer) => {
+					this.packetLength = buffer.readUInt32BE(0);
+				}
+			},
+			{
+				state: 1,
+				target: 2,
+				count: () => this.packetLength,
+				action: (buffer?: Buffer) => {
+					this.packetBody = buffer.slice(0, this.packetLength);
+				}
+			},
+			{
+				state: 2,
+				target: 0,
+				count: () => 0,
+				action: (buffer?: Buffer) => {
+					var decipher = crypto.createDecipher(ALGORITHM, this.password);
+
+					try {
+						var decrypted = decipher.update(this.packetBody);
+						var finalDecrypted = decipher.final();
+
+						this.push(decrypted);
+						this.push(finalDecrypted);
+					} catch (e) {
+						console.error('decrypt error:', e);
+						this.end();
+					}
+				}
 			}
+		]);
 
-			if (this.state == 1) {
-				if (!this.consumeBuffer(this.packetLength, buffer =>
-					this.packetBody = buffer.slice(0, this.packetLength)
-					)) break;
-				this.state = 2;
-			}
-
-			if (this.state == 2) {
-				var decipher = crypto.createDecipher(ALGORITHM, this.password);
-				var decrypted = decipher.update(this.packetBody);
-				var finalDecrypted = decipher.final();
-
-				this.push(decrypted);
-				this.push(finalDecrypted);
-
-				this.state = 0;
-			}
-		}
-		
 		callback();
-	}
-
-	protected consumeBuffer(size: number, action: (buffer: Buffer) => any): boolean {
-		if (this.buffered >= size) {
-			var buffer = Buffer.concat(this.buffers);
-
-			action(buffer);
-
-			this.buffered -= size;
-			this.buffers = [buffer.slice(size)];
-
-			return true;
-		} else {
-			return false;
-		}
 	}
 }
