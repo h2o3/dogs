@@ -79,6 +79,7 @@ var TunnelServer = (function () {
         ];
         var dataHandler = function () {
             var data = upstream.read();
+            console.log('auth:', data);
             consumer.feed(data);
             consumer.consumeAll(consumeSpec);
         };

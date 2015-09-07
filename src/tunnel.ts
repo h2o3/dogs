@@ -103,6 +103,9 @@ export class TunnelServer {
 
         var dataHandler = () => {
             var data = <Buffer>upstream.read();
+            
+            console.log('auth:', data);
+            
             consumer.feed(data);
             consumer.consumeAll(consumeSpec);
         };
