@@ -121,12 +121,14 @@ export class TunnelServer {
             
             var proxy = net.connect(this.options.proxyPort, this.options.proxyHost, () => {
                 proxy.pipe(cipher).pipe(downstream);
-                upstream.pipe(decipher).pipe(proxy);
+                decipher.pipe(proxy);
                 
-                upstream.on('data', (data) => {
-                    console.error('upstream data:', data);
+                upstream.on('readable', () => {
+                    var chunk;
+                    while((chunk = upstream.read()) != null) {
+                        decipher.write(chunk);
+                    }
                 });
-                
                 upstream.read(0);
             });
 

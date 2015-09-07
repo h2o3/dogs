@@ -94,9 +94,12 @@ var TunnelServer = (function () {
             var decipher = new secure.DecryptStream(password);
             var proxy = net.connect(_this.options.proxyPort, _this.options.proxyHost, function () {
                 proxy.pipe(cipher).pipe(downstream);
-                upstream.pipe(decipher).pipe(proxy);
-                upstream.on('data', function (data) {
-                    console.error('upstream data:', data);
+                decipher.pipe(proxy);
+                upstream.on('readable', function () {
+                    var chunk;
+                    while ((chunk = upstream.read()) != null) {
+                        decipher.write(chunk);
+                    }
                 });
                 upstream.read(0);
             });
