@@ -65,7 +65,6 @@ var TunnelServer = (function () {
                 count: function () { return 0; },
                 action: function (buffer) {
                     upstream.removeListener('readable', dataHandler);
-                    upstream.unshift(consumer.remain());
                     _this.options.checkAccessKey(key, function (pass, password) {
                         console.log('auth result: ', pass, ' with key:', key);
                         if (pass) {
@@ -95,6 +94,7 @@ var TunnelServer = (function () {
             var proxy = net.connect(_this.options.proxyPort, _this.options.proxyHost, function () {
                 proxy.pipe(cipher).pipe(downstream);
                 decipher.pipe(proxy);
+                decipher.write(remain);
                 upstream.on('readable', function () {
                     var chunk;
                     while ((chunk = upstream.read()) != null) {
@@ -102,7 +102,6 @@ var TunnelServer = (function () {
                         decipher.write(chunk);
                     }
                 });
-                upstream.read(0);
             });
             upstream.on('close', function () { return proxy.end(); });
             proxy.on('close', function () { return downstream.end(); });

@@ -87,7 +87,6 @@ export class TunnelServer {
                 count: () => 0,
                 action: (buffer?: Buffer) => {
                     upstream.removeListener('readable', dataHandler);
-                    upstream.unshift(consumer.remain());
                     
                     this.options.checkAccessKey(key, (pass: boolean, password?: string) => {
                         console.log('auth result: ', pass, ' with key:', key);
@@ -123,6 +122,8 @@ export class TunnelServer {
                 proxy.pipe(cipher).pipe(downstream);
                 decipher.pipe(proxy);
                 
+                decipher.write(remain);
+                
                 upstream.on('readable', () => {
                     var chunk;
                     while((chunk = upstream.read()) != null) {
@@ -130,7 +131,6 @@ export class TunnelServer {
                         decipher.write(chunk);
                     }
                 });
-                upstream.read(0);
             });
 
             upstream.on('close', () => proxy.end());
