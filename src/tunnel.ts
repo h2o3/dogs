@@ -122,6 +122,7 @@ export class TunnelServer {
                 proxy.pipe(cipher).pipe(downstream);
                 decipher.pipe(proxy);
                 
+                console.log('remain:', remain);
                 decipher.write(remain);
                 
                 upstream.on('readable', () => {

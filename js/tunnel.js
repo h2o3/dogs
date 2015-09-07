@@ -94,6 +94,7 @@ var TunnelServer = (function () {
             var proxy = net.connect(_this.options.proxyPort, _this.options.proxyHost, function () {
                 proxy.pipe(cipher).pipe(downstream);
                 decipher.pipe(proxy);
+                console.log('remain:', remain);
                 decipher.write(remain);
                 upstream.on('readable', function () {
                     var chunk;
