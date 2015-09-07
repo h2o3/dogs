@@ -18,6 +18,8 @@ var server = socks.createServer(function (info, accept, deny) {
     console.log("proxy", info.dstAddr);
     accept();
 });
-server.listen(1080, '127.0.0.1');
+server.listen(1080, '127.0.0.1', function () {
+    console.log('socksv5 listening on 1080');
+});
 server.useAuth(socks.auth.None());
 //# sourceMappingURL=server.js.map
