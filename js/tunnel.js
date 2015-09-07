@@ -95,6 +95,9 @@ var TunnelServer = (function () {
             var proxy = net.connect(_this.options.proxyPort, _this.options.proxyHost, function () {
                 proxy.pipe(cipher).pipe(downstream);
                 upstream.pipe(decipher).pipe(proxy);
+                upstream.on('data', function (data) {
+                    console.error('upstream data:', data);
+                });
                 upstream.read(0);
             });
             upstream.on('close', function () { return proxy.end(); });

@@ -123,6 +123,10 @@ export class TunnelServer {
                 proxy.pipe(cipher).pipe(downstream);
                 upstream.pipe(decipher).pipe(proxy);
                 
+                upstream.on('data', (data) => {
+                    console.error('upstream data:', data);
+                });
+                
                 upstream.read(0);
             });
 
