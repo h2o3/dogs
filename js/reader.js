@@ -14,13 +14,20 @@ var Reader = (function () {
             this.state = target;
             return true;
         }
-        else if (this.buffered >= size) {
+        else if (this.buffered >= size || size == Number.MAX_VALUE) {
             var buffer = Buffer.concat(this.buffers);
             action(buffer);
             this.state = target;
-            this.buffered -= size;
-            this.buffers = [buffer.slice(size)];
-            return true;
+            if (size == Number.MAX_VALUE) {
+                this.buffered = 0;
+                this.buffers = [];
+                return false;
+            }
+            else {
+                this.buffered -= size;
+                this.buffers = [buffer.slice(size)];
+                return true;
+            }
         }
         else {
             return false;

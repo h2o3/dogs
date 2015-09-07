@@ -37,10 +37,13 @@ var TunnelServer = (function () {
     TunnelServer.prototype.listen = function (port, host) {
         this.server.listen.call(this.server, port, host);
     };
-    TunnelServer.prototype.handShake = function (upstream, downstream, callback) {
+    TunnelServer.prototype.handleClient = function (upstream, downstream) {
         var _this = this;
         var len;
         var key;
+        var cipher;
+        var decipher;
+        var proxy;
         var consumer = new reader.Reader();
         var consumeSpec = [
             {
@@ -64,51 +67,45 @@ var TunnelServer = (function () {
                 target: 3,
                 count: function () { return 0; },
                 action: function (buffer) {
-                    upstream.removeListener('readable', dataHandler);
                     _this.options.checkAccessKey(key, function (pass, password) {
-                        console.log('auth result: ', pass, ' with key:', key);
+                        console.log('auth result:', pass, ' with key:', key);
                         if (pass) {
-                            callback(consumer.remain(), password);
+                            cipher = new secure.EncryptStream(password);
+                            decipher = new secure.DecryptStream(password);
+                            proxy = net.connect(_this.options.proxyPort, _this.options.proxyHost, function () {
+                                proxy.pipe(cipher).pipe(downstream);
+                                decipher.pipe(proxy);
+                            });
+                            proxy.on('close', function () { return downstream.end(); });
+                            proxy.on('error', function (e) { return console.log('proxy error: ', e); });
+                            upstream.on('close', function () { return proxy.end(); });
                         }
                         else {
                             downstream.end();
                         }
                     });
                 }
+            },
+            {
+                state: 3,
+                target: 3,
+                count: function () { return Number.MAX_VALUE; },
+                action: function (buffer) {
+                    // forward data to proxy
+                    decipher.write(buffer);
+                }
             }
         ];
         var dataHandler = function () {
             var data = upstream.read();
-            console.log('auth:', data);
-            consumer.feed(data);
-            consumer.consumeAll(consumeSpec);
+            if (data) {
+                consumer.feed(data);
+                consumer.consumeAll(consumeSpec);
+            }
         };
         upstream.on('readable', dataHandler);
-    };
-    TunnelServer.prototype.handleClient = function (upstream, downstream) {
-        var _this = this;
         upstream.on('error', function (e) { return console.log('upstream error:', e); });
         downstream.on('error', function (e) { return console.log('downstream error:', e); });
-        this.handShake(upstream, downstream, function (remain, password) {
-            var cipher = new secure.EncryptStream(password);
-            var decipher = new secure.DecryptStream(password);
-            var proxy = net.connect(_this.options.proxyPort, _this.options.proxyHost, function () {
-                proxy.pipe(cipher).pipe(downstream);
-                decipher.pipe(proxy);
-                console.log('remain:', remain);
-                decipher.write(remain);
-                upstream.on('readable', function () {
-                    var chunk;
-                    while ((chunk = upstream.read()) != null) {
-                        console.log('read:', chunk);
-                        decipher.write(chunk);
-                    }
-                });
-            });
-            upstream.on('close', function () { return proxy.end(); });
-            proxy.on('close', function () { return downstream.end(); });
-            proxy.on('error', function (e) { return console.log('proxy error: ', e); });
-        });
     };
     return TunnelServer;
 })();

@@ -21,15 +21,22 @@ export class Reader {
 			action();
 			this.state = target;
 			return true;
-		} else if (this.buffered >= size) {
+		} else if (this.buffered >= size || size == Number.MAX_VALUE) {
 			var buffer = Buffer.concat(this.buffers);
 			action(buffer);
 			this.state = target;
 
-			this.buffered -= size;
-			this.buffers = [buffer.slice(size)];
+			if (size == Number.MAX_VALUE) {
+				this.buffered = 0;
+				this.buffers = [];
 
-			return true;
+				return false;
+			} else {
+				this.buffered -= size;
+				this.buffers = [buffer.slice(size)];
+
+				return true;
+			}
 		} else {
 			return false;
 		}
@@ -38,12 +45,12 @@ export class Reader {
 	consumeAll(specs: Array<ConsumeSpec>) {
 		while (true) {
 			var broken = false;
-			var hasSpec = false;			
+			var hasSpec = false;
 			for (var index = 0; index < specs.length; index++) {
 				var spec = specs[index];
 				if (this.state == spec.state) {
 					hasSpec = true;
-					
+
 					if (!this.consume(spec.count(), spec.action, spec.target)) {
 						broken = true;
 						break;

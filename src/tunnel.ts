@@ -59,9 +59,14 @@ export class TunnelServer {
         this.server.listen.call(this.server, port, host);
     }
 
-    protected handShake(upstream: stream.Readable, downstream: stream.Writable, callback: (remain: Buffer, password: string) => any) {
+    protected handleClient(upstream: stream.Readable, downstream: stream.Writable) {
         var len: number;
         var key: string;
+
+        var cipher: secure.EncryptStream;
+        var decipher: secure.DecryptStream;
+
+        var proxy: net.Socket;
 
         var consumer = new reader.Reader();
         var consumeSpec = [
@@ -86,61 +91,51 @@ export class TunnelServer {
                 target: 3,
                 count: () => 0,
                 action: (buffer?: Buffer) => {
-                    upstream.removeListener('readable', dataHandler);
-                    
                     this.options.checkAccessKey(key, (pass: boolean, password?: string) => {
-                        console.log('auth result: ', pass, ' with key:', key);
+                        console.log('auth result:', pass, ' with key:', key);
 
                         if (pass) {
-                            callback(consumer.remain(), password);
+                            cipher = new secure.EncryptStream(password);
+                            decipher = new secure.DecryptStream(password);
+
+                            proxy = net.connect(this.options.proxyPort, this.options.proxyHost, () => {
+                                proxy.pipe(cipher).pipe(downstream);
+                                decipher.pipe(proxy);
+                            });
+
+                            proxy.on('close', () => downstream.end());
+                            proxy.on('error', (e) => console.log('proxy error: ', e));
+
+                            upstream.on('close', () => proxy.end());
                         } else {
                             downstream.end();
                         }
                     });
+                }
+            },
+            {
+                state: 3,
+                target: 3,
+                count: () => Number.MAX_VALUE,
+                action: (buffer?: Buffer) => {
+                    // forward data to proxy
+                    decipher.write(buffer);
                 }
             }
         ];
 
         var dataHandler = () => {
             var data = <Buffer>upstream.read();
-            
-            console.log('auth:', data);
-            
-            consumer.feed(data);
-            consumer.consumeAll(consumeSpec);
+            if (data) {
+                consumer.feed(data);
+                consumer.consumeAll(consumeSpec);
+            }
         };
 
         upstream.on('readable', dataHandler);
-    }
 
-    protected handleClient(upstream: stream.Readable, downstream: stream.Writable) {
         upstream.on('error', (e) => console.log('upstream error:', e));
         downstream.on('error', (e) => console.log('downstream error:', e))
-
-        this.handShake(upstream, downstream, (remain, password) => {
-            var cipher = new secure.EncryptStream(password);
-            var decipher = new secure.DecryptStream(password);            
-            
-            var proxy = net.connect(this.options.proxyPort, this.options.proxyHost, () => {
-                proxy.pipe(cipher).pipe(downstream);
-                decipher.pipe(proxy);
-                
-                console.log('remain:', remain);
-                decipher.write(remain);
-                
-                upstream.on('readable', () => {
-                    var chunk;
-                    while((chunk = upstream.read()) != null) {
-                        console.log('read:', chunk);
-                        decipher.write(chunk);
-                    }
-                });
-            });
-
-            upstream.on('close', () => proxy.end());
-            proxy.on('close', () => downstream.end());
-            proxy.on('error', (e) => console.log('proxy error: ', e));
-        });
     }
 }
 
