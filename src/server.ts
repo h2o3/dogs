@@ -1,7 +1,7 @@
 import t = require('./tunnel');
 import socks = require('socksv5');
 
-var port = 9001;
+var port = 9000;
 
 if (process.argv.length == 3) {
 	port = parseInt(process.argv[2]);
