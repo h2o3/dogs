@@ -120,6 +120,7 @@ export class TunnelServer {
             var decipher = new secure.DecryptStream(password);
             
             var proxy = net.connect(this.options.proxyPort, this.options.proxyHost, () => {
+                console.error('connected to proxy server');
                 proxy.pipe(cipher).pipe(downstream);
                 upstream.pipe(decipher).pipe(proxy);
             });

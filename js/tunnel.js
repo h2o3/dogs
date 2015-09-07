@@ -93,6 +93,7 @@ var TunnelServer = (function () {
             var cipher = new secure.EncryptStream(password);
             var decipher = new secure.DecryptStream(password);
             var proxy = net.connect(_this.options.proxyPort, _this.options.proxyHost, function () {
+                console.error('connected to proxy server');
                 proxy.pipe(cipher).pipe(downstream);
                 upstream.pipe(decipher).pipe(proxy);
             });
