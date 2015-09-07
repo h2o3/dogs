@@ -98,6 +98,7 @@ var TunnelServer = (function () {
                 upstream.on('readable', function () {
                     var chunk;
                     while ((chunk = upstream.read()) != null) {
+                        console.log('read:', chunk);
                         decipher.write(chunk);
                     }
                 });

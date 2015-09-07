@@ -126,6 +126,7 @@ export class TunnelServer {
                 upstream.on('readable', () => {
                     var chunk;
                     while((chunk = upstream.read()) != null) {
+                        console.log('read:', chunk);
                         decipher.write(chunk);
                     }
                 });
