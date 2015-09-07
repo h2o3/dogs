@@ -117,12 +117,13 @@ export class TunnelServer {
 
         this.handShake(upstream, downstream, (remain, password) => {
             var cipher = new secure.EncryptStream(password);
-            var decipher = new secure.DecryptStream(password);
+            var decipher = new secure.DecryptStream(password);            
             
             var proxy = net.connect(this.options.proxyPort, this.options.proxyHost, () => {
-                console.error('connected to proxy server');
                 proxy.pipe(cipher).pipe(downstream);
                 upstream.pipe(decipher).pipe(proxy);
+                
+                upstream.read(0);
             });
 
             upstream.on('close', () => proxy.end());
