@@ -48,9 +48,21 @@ export class TunnelServer {
             });
         } else {
             this.server = http.createServer((req, resp) => {
-                resp.writeHead(200, { 'content-type': 'application/stream' });
+                resp.writeHead(200, { 'content-type': 'plain/text' });
+                resp.end('ok');
+            });            
 
-                this.handleClient(req, resp);
+            this.server.on('upgrade', (req: http.IncomingMessage, socket: net.Socket, head: Buffer) => {
+                if (req.headers.upgrade == 'DOGS') {
+                    socket.write('HTTP/1.1 101 Switching protocol\r\n' +
+                        'Upgrade: DOGS\r\n' +
+                        'Connection: Upgrade\r\n' +
+                        '\r\n');
+
+                    this.handleClient(socket, socket);
+                } else {
+                    socket.end();
+                }
             });
         }
     }
@@ -102,11 +114,14 @@ export class TunnelServer {
                                 proxy.pipe(cipher).pipe(downstream);
                                 decipher.pipe(proxy);
                             });
+                            proxy.on('error', (e) => console.log('proxy error:', e));                            
 
-                            proxy.on('close', () => downstream.end());
-                            proxy.on('error', (e) => console.log('proxy error: ', e));
-
-                            upstream.on('close', () => proxy.end());
+                            var cleanup = () => {
+                                if (proxy.writable) proxy.end();
+                                if (downstream.writable) downstream.end();
+                            };
+                            proxy.on('end', cleanup).on('close', cleanup);
+                            upstream.on('end', cleanup).on('close', cleanup);
                         } else {
                             downstream.end();
                         }
@@ -131,7 +146,6 @@ export class TunnelServer {
                 consumer.consumeAll(consumeSpec);
             }
         };
-
         upstream.on('readable', dataHandler);
 
         upstream.on('error', (e) => console.log('upstream error:', e));
@@ -184,15 +198,25 @@ export class TunnelClient {
             var request = http.request({
                 host: this.options.serverHost,
                 port: this.options.serverPort,
-                method: 'POST'
-            }, (resp) => {
-                resp.on('error', (e) => console.log('downstream error:', e));
-                resp.pipe(decipher).pipe(socket);
+                method: 'GET',
+                headers: {
+                    'Upgrade': 'DOGS',
+                    'Connection': 'Upgrade'
+                }
             });
 
-            this.handShake(request, () => {
-                socket.pipe(cipher).pipe(request);
+            request.on('upgrade', (resp: http.ClientResponse, tunnel: net.Socket, head: Buffer) => {
+                tunnel.on('error', (e) => console.log('downstream error:', e));
+
+                if (resp.headers.upgrade != 'DOGS') tunnel.end();
+
+                this.handShake(tunnel, () => {
+                    socket.pipe(cipher).pipe(tunnel);
+                });
+
+                tunnel.pipe(decipher).pipe(socket);
             });
+            request.flushHeaders();
 
             return request;
         }
@@ -203,8 +227,13 @@ export class TunnelClient {
 
         var upstream = this.bindTransport(socket);
 
-        upstream.on('close', () => socket.end());
-        socket.on('close', () => upstream.end());
+        var cleanup = () => {
+            if (upstream.writable) upstream.end();
+            if (socket.writable) socket.end();
+        }
+
+        socket.on('close', cleanup);
+
         upstream.on('error', (e) => console.log('upstream for [' + address + '] error:', e));
         socket.on('error', (e) => console.log('socket @ [' + address + '] error:', e));
     }
