@@ -48,7 +48,7 @@ export class TunnelServer {
             });
         } else {
             this.server = http.createServer((req, resp) => {
-                resp.writeHead(200, { 'content-type': 'plain/text' });
+                resp.writeHead(200, { 'content-type': 'text/plain' });
                 resp.end('ok');
             });            
 
