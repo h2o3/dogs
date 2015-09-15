@@ -2,16 +2,18 @@ import t = require('./tunnel');
 import socks = require('socksv5');
 
 var port = 9000;
+var transport = t.Transport.TCP;
 
-if (process.argv.length == 3) {
+if (process.argv.length >= 3) {
 	port = parseInt(process.argv[2]);
+	if (process.argv.length >= 4 && process.argv[3] == 'HTTP') transport = t.Transport.HTTP;
 }
 
 // start server
 t.createServer({
 	proxyHost: '127.0.0.1',
 	proxyPort: 1080,
-	transport: t.Transport.HTTP,
+	transport: transport,
 	checkAccessKey: (key, cb) => {
 		cb(key == 'helloworld', 'anythingwhichisusedtoencryptthepackets');
 	}

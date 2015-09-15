@@ -1,1 +1,1 @@
-web: npm run server $PORT
+web: npm run server $PORT HTTP
