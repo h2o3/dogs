@@ -12,7 +12,7 @@ export class EncryptStream extends stream.Transform {
 		this.password = password;
 	}
 
-	_transform(data: Buffer|string, enc: string, callback: Function): void {
+	_transform(data: Buffer | string, enc: string, callback: Function): void {
 		var chunk: Buffer;
 
 		if (data instanceof Buffer) {
@@ -43,14 +43,59 @@ export class DecryptStream extends stream.Transform {
 	private packetLength: number;
 	private packetBody: Buffer;
 
-	private reader: reader.Reader = new reader.Reader();
+	private reader: reader.Reader = new reader.Reader([
+		{
+			state: 0,
+			count: () => 4,
+			action: (cb: reader.ConsumeCb, buffer?: Buffer) => {
+				this.packetLength = buffer.readUInt32BE(0);
+				cb(1);
+			}
+		},
+		{
+			state: 1,
+			count: () => this.packetLength,
+			action: (cb: reader.ConsumeCb, buffer?: Buffer) => {
+				this.packetBody = buffer.slice(0, this.packetLength);
+				cb(2);
+			}
+		},
+		{
+			state: 2,
+			count: () => 0,
+			action: (cb: reader.ConsumeCb, buffer?: Buffer) => {
+				var decipher = crypto.createDecipher(ALGORITHM, this.password);
+
+				try {
+					var decrypted = decipher.update(this.packetBody);
+					var finalDecrypted = decipher.final();
+
+					this.push(decrypted);
+					this.push(finalDecrypted);
+
+					cb(0);
+				} catch (e) {
+					console.error('decrypt error:', e);
+
+					cb(3);
+				}
+			}
+		},
+		{
+			state: 3,
+			count: () => 0,
+			action: (cb: reader.ConsumeCb, buffer?: Buffer) => {
+				this.end();
+			}
+		}
+	]);
 
 	constructor(password) {
 		super();
 		this.password = password;
 	}
 
-	_transform(data: Buffer|string, enc: string, callback: Function): void {
+	_transform(data: Buffer | string, enc: string, callback: Function): void {
 		var chunk: Buffer;
 
 		if (data instanceof Buffer) {
@@ -61,43 +106,7 @@ export class DecryptStream extends stream.Transform {
 
 		this.reader.feed(chunk);
 
-		this.reader.consumeAll([
-			{
-				state: 0,
-				target: 1,
-				count: () => 4,
-				action: (buffer?: Buffer) => {
-					this.packetLength = buffer.readUInt32BE(0);
-				}
-			},
-			{
-				state: 1,
-				target: 2,
-				count: () => this.packetLength,
-				action: (buffer?: Buffer) => {
-					this.packetBody = buffer.slice(0, this.packetLength);
-				}
-			},
-			{
-				state: 2,
-				target: 0,
-				count: () => 0,
-				action: (buffer?: Buffer) => {
-					var decipher = crypto.createDecipher(ALGORITHM, this.password);
-
-					try {
-						var decrypted = decipher.update(this.packetBody);
-						var finalDecrypted = decipher.final();
-
-						this.push(decrypted);
-						this.push(finalDecrypted);
-					} catch (e) {
-						console.error('decrypt error:', e);
-						this.end();
-					}
-				}
-			}
-		]);
+		this.reader.consumeAll();
 
 		callback();
 	}

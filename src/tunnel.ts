@@ -34,7 +34,7 @@ export function connect(options: ClientOptions) {
 export class TunnelServer {
     private options: ServerOptions;
 
-    private server: net.Server|http.Server;
+    private server: net.Server | http.Server;
 
     constructor(options: ServerOptions) {
         this.options = options;
@@ -50,7 +50,7 @@ export class TunnelServer {
             this.server = http.createServer((req, resp) => {
                 resp.writeHead(200, { 'content-type': 'text/plain' });
                 resp.end('ok');
-            });            
+            });
 
             this.server.on('upgrade', (req: http.IncomingMessage, socket: net.Socket, head: Buffer) => {
                 if (req.headers.upgrade == 'DOGS') {
@@ -80,29 +80,27 @@ export class TunnelServer {
 
         var proxy: net.Socket;
 
-        var consumer = new reader.Reader();
-        var consumeSpec = [
+        var consumer = new reader.Reader([
             {
                 state: 0,
-                target: 1,
                 count: () => 1,
-                action: (buffer?: Buffer) => {
+                action: (cb: reader.ConsumeCb, buffer?: Buffer) => {
                     len = buffer.readUInt8(0);
+                    cb(1);
                 }
             },
             {
                 state: 1,
-                target: 2,
                 count: () => len,
-                action: (buffer?: Buffer) => {
+                action: (cb: reader.ConsumeCb, buffer?: Buffer) => {
                     key = buffer.slice(0, len).toString();
+                    cb(2);
                 }
             },
             {
                 state: 2,
-                target: 3,
                 count: () => 0,
-                action: (buffer?: Buffer) => {
+                action: (cb: reader.ConsumeCb, buffer?: Buffer) => {
                     this.options.checkAccessKey(key, (pass: boolean, password?: string) => {
                         console.log('auth result:', pass, ' with key:', key);
 
@@ -114,7 +112,7 @@ export class TunnelServer {
                                 proxy.pipe(cipher).pipe(downstream);
                                 decipher.pipe(proxy);
                             });
-                            proxy.on('error', (e) => console.log('proxy error:', e));                            
+                            proxy.on('error', (e) => console.log('proxy error:', e));
 
                             var cleanup = () => {
                                 if (proxy.writable) proxy.end();
@@ -122,28 +120,37 @@ export class TunnelServer {
                             };
                             proxy.on('end', cleanup).on('close', cleanup);
                             upstream.on('end', cleanup).on('close', cleanup);
+
+                            cb(3);
                         } else {
-                            downstream.end();
+                            cb(4);
                         }
                     });
                 }
             },
             {
                 state: 3,
-                target: 3,
                 count: () => Number.MAX_VALUE,
-                action: (buffer?: Buffer) => {
+                action: (cb: reader.ConsumeCb, buffer?: Buffer) => {
                     // forward data to proxy
                     decipher.write(buffer);
+                    cb(3);
+                }
+            },
+            {
+                state: 4,
+                count: () => 0,
+                action: (cb: reader.ConsumeCb, buffer?: Buffer) => {
+                    downstream.end();
                 }
             }
-        ];
+        ]);
 
         var dataHandler = () => {
             var data = <Buffer>upstream.read();
             if (data) {
                 consumer.feed(data);
-                consumer.consumeAll(consumeSpec);
+                consumer.consumeAll();
             }
         };
         upstream.on('readable', dataHandler);

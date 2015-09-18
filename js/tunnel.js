@@ -56,29 +56,27 @@ var TunnelServer = (function () {
         var cipher;
         var decipher;
         var proxy;
-        var consumer = new reader.Reader();
-        var consumeSpec = [
+        var consumer = new reader.Reader([
             {
                 state: 0,
-                target: 1,
                 count: function () { return 1; },
-                action: function (buffer) {
+                action: function (cb, buffer) {
                     len = buffer.readUInt8(0);
+                    cb(1);
                 }
             },
             {
                 state: 1,
-                target: 2,
                 count: function () { return len; },
-                action: function (buffer) {
+                action: function (cb, buffer) {
                     key = buffer.slice(0, len).toString();
+                    cb(2);
                 }
             },
             {
                 state: 2,
-                target: 3,
                 count: function () { return 0; },
-                action: function (buffer) {
+                action: function (cb, buffer) {
                     _this.options.checkAccessKey(key, function (pass, password) {
                         console.log('auth result:', pass, ' with key:', key);
                         if (pass) {
@@ -97,28 +95,36 @@ var TunnelServer = (function () {
                             };
                             proxy.on('end', cleanup).on('close', cleanup);
                             upstream.on('end', cleanup).on('close', cleanup);
+                            cb(3);
                         }
                         else {
-                            downstream.end();
+                            cb(4);
                         }
                     });
                 }
             },
             {
                 state: 3,
-                target: 3,
                 count: function () { return Number.MAX_VALUE; },
-                action: function (buffer) {
+                action: function (cb, buffer) {
                     // forward data to proxy
                     decipher.write(buffer);
+                    cb(3);
+                }
+            },
+            {
+                state: 4,
+                count: function () { return 0; },
+                action: function (cb, buffer) {
+                    downstream.end();
                 }
             }
-        ];
+        ]);
         var dataHandler = function () {
             var data = upstream.read();
             if (data) {
                 consumer.feed(data);
-                consumer.consumeAll(consumeSpec);
+                consumer.consumeAll();
             }
         };
         upstream.on('readable', dataHandler);

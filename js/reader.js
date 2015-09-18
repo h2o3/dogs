@@ -1,54 +1,49 @@
 var Reader = (function () {
-    function Reader() {
+    function Reader(specs) {
+        this.idle = true;
         this.buffers = [];
         this.buffered = 0;
         this.state = 0;
+        this.specs = specs;
     }
     Reader.prototype.feed = function (buffer) {
         this.buffers.push(buffer);
         this.buffered += buffer.length;
     };
-    Reader.prototype.consume = function (size, action, target) {
-        if (size == 0) {
-            action();
-            this.state = target;
-            return true;
-        }
-        else if (this.buffered >= size || size == Number.MAX_VALUE) {
-            var buffer = Buffer.concat(this.buffers);
-            action(buffer);
-            this.state = target;
-            if (size == Number.MAX_VALUE) {
-                this.buffered = 0;
-                this.buffers = [];
-                return false;
-            }
-            else {
-                this.buffered -= size;
-                this.buffers = [buffer.slice(size)];
-                return true;
-            }
-        }
-        else {
-            return false;
-        }
+    Reader.prototype.comsumeCb = function (target) {
+        var _this = this;
+        this.state = target;
+        this.idle = true;
+        process.nextTick(function () {
+            _this.consumeAll();
+        });
     };
-    Reader.prototype.consumeAll = function (specs) {
-        while (true) {
-            var broken = false;
-            var hasSpec = false;
-            for (var index = 0; index < specs.length; index++) {
-                var spec = specs[index];
-                if (this.state == spec.state) {
-                    hasSpec = true;
-                    if (!this.consume(spec.count(), spec.action, spec.target)) {
-                        broken = true;
-                        break;
+    Reader.prototype.consumeAll = function () {
+        if (this.idle) {
+            this.idle = false;
+            for (var index = 0; index < this.specs.length; index++) {
+                var spec = this.specs[index];
+                if (spec.state == this.state) {
+                    var requirement = spec.count();
+                    if (this.buffered >= requirement
+                        || (requirement == Number.MAX_VALUE && this.buffered > 0)) {
+                        var buffer = Buffer.concat(this.buffers);
+                        if (requirement == Number.MAX_VALUE) {
+                            this.buffered = 0;
+                            this.buffers = [];
+                        }
+                        else {
+                            this.buffered -= requirement;
+                            this.buffers = [buffer.slice(requirement)];
+                        }
+                        spec.action(this.comsumeCb.bind(this), buffer);
                     }
+                    else {
+                        this.idle = true;
+                    }
+                    break;
                 }
             }
-            if (!hasSpec || broken)
-                break;
         }
     };
     Reader.prototype.reset = function () {

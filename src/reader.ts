@@ -1,63 +1,69 @@
+export interface ConsumeCb {
+	(target: number): void;
+}
+
 export interface ConsumeSpec {
 	state: number;
-	target: number;
 	count: () => number;
-	action: (buffer?: Buffer) => void;
+	action: (cb: ConsumeCb, buffer?: Buffer) => void;
 }
 
 export class Reader {
+	private specs: Array<ConsumeSpec>;
+	private idle: boolean = true;
+
 	private buffers: Array<Buffer> = [];
 	private buffered: number = 0;
 
 	state: number = 0;
+
+	constructor(specs: Array<ConsumeSpec>) {
+		this.specs = specs;
+	}
 
 	feed(buffer: Buffer) {
 		this.buffers.push(buffer);
 		this.buffered += buffer.length;
 	}
 
-	consume(size: number, action: (buffer?: Buffer) => void, target: number): boolean {
-		if (size == 0) {
-			action();
-			this.state = target;
-			return true;
-		} else if (this.buffered >= size || size == Number.MAX_VALUE) {
-			var buffer = Buffer.concat(this.buffers);
-			action(buffer);
-			this.state = target;
+	protected comsumeCb(target: number) {
+		this.state = target;
+		this.idle = true;
 
-			if (size == Number.MAX_VALUE) {
-				this.buffered = 0;
-				this.buffers = [];
-
-				return false;
-			} else {
-				this.buffered -= size;
-				this.buffers = [buffer.slice(size)];
-
-				return true;
-			}
-		} else {
-			return false;
-		}
+		process.nextTick(() => {
+			this.consumeAll();
+		});
 	}
 
-	consumeAll(specs: Array<ConsumeSpec>) {
-		while (true) {
-			var broken = false;
-			var hasSpec = false;
-			for (var index = 0; index < specs.length; index++) {
-				var spec = specs[index];
-				if (this.state == spec.state) {
-					hasSpec = true;
+	consumeAll() {
+		if (this.idle) {
+			this.idle = false;
 
-					if (!this.consume(spec.count(), spec.action, spec.target)) {
-						broken = true;
-						break;
+			for (var index = 0; index < this.specs.length; index++) {
+				var spec = this.specs[index];
+
+				if (spec.state == this.state) {
+					var requirement = spec.count();
+					if (this.buffered >= requirement
+						|| (requirement == Number.MAX_VALUE && this.buffered > 0)) {
+						var buffer = Buffer.concat(this.buffers);
+
+						if (requirement == Number.MAX_VALUE) {
+							this.buffered = 0;
+							this.buffers = [];
+						} else {
+							this.buffered -= requirement;
+							this.buffers = [buffer.slice(requirement)];
+						}
+
+						spec.action(this.comsumeCb.bind(this), buffer);
+					} else {
+						this.idle = true;
 					}
+
+					break;
 				}
 			}
-			if (!hasSpec || broken) break;
 		}
 	}
 
