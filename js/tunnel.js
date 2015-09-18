@@ -15,6 +15,14 @@ function connect(options) {
     return new TunnelClient(options);
 }
 exports.connect = connect;
+var State;
+(function (State) {
+    State[State["READ_KEY_LEN"] = 0] = "READ_KEY_LEN";
+    State[State["READ_KEY"] = 1] = "READ_KEY";
+    State[State["AUTH"] = 2] = "AUTH";
+    State[State["FORWARD"] = 3] = "FORWARD";
+    State[State["AUTH_FAIL"] = 4] = "AUTH_FAIL";
+})(State || (State = {}));
 var TunnelServer = (function () {
     function TunnelServer(options) {
         this.options = options;
@@ -56,25 +64,25 @@ var TunnelServer = (function () {
         var cipher;
         var decipher;
         var proxy;
-        var consumer = new reader.Reader([
+        var consumer = new reader.Reader(State.READ_KEY_LEN, [
             {
-                state: 0,
+                state: State.READ_KEY_LEN,
                 count: function () { return 1; },
                 action: function (cb, buffer) {
                     len = buffer.readUInt8(0);
-                    cb(1);
+                    cb(State.READ_KEY);
                 }
             },
             {
-                state: 1,
+                state: State.READ_KEY,
                 count: function () { return len; },
                 action: function (cb, buffer) {
                     key = buffer.slice(0, len).toString();
-                    cb(2);
+                    cb(State.AUTH);
                 }
             },
             {
-                state: 2,
+                state: State.AUTH,
                 count: function () { return 0; },
                 action: function (cb, buffer) {
                     _this.options.checkAccessKey(key, function (pass, password) {
@@ -95,25 +103,25 @@ var TunnelServer = (function () {
                             };
                             proxy.on('end', cleanup).on('close', cleanup);
                             upstream.on('end', cleanup).on('close', cleanup);
-                            cb(3);
+                            cb(State.FORWARD);
                         }
                         else {
-                            cb(4);
+                            cb(State.AUTH_FAIL);
                         }
                     });
                 }
             },
             {
-                state: 3,
+                state: State.FORWARD,
                 count: function () { return Number.MAX_VALUE; },
                 action: function (cb, buffer) {
                     // forward data to proxy
                     decipher.write(buffer);
-                    cb(3);
+                    cb(State.FORWARD);
                 }
             },
             {
-                state: 4,
+                state: State.AUTH_FAIL,
                 count: function () { return 0; },
                 action: function (cb, buffer) {
                     downstream.end();

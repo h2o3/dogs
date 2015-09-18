@@ -37,33 +37,37 @@ export class EncryptStream extends stream.Transform {
 	}
 }
 
+enum State {
+	READ_LEN, READ_BODY, PROCESS, EXIT
+}
+
 export class DecryptStream extends stream.Transform {
 	private password: string;
 
 	private packetLength: number;
 	private packetBody: Buffer;
 
-	private reader: reader.Reader = new reader.Reader([
+	private reader: reader.Reader<State> = new reader.Reader(State.READ_LEN, [
 		{
-			state: 0,
+			state: State.READ_LEN,
 			count: () => 4,
-			action: (cb: reader.ConsumeCb, buffer?: Buffer) => {
+			action: (cb: reader.ConsumeCb<State>, buffer?: Buffer) => {
 				this.packetLength = buffer.readUInt32BE(0);
-				cb(1);
+				cb(State.READ_BODY);
 			}
 		},
 		{
-			state: 1,
+			state: State.READ_BODY,
 			count: () => this.packetLength,
-			action: (cb: reader.ConsumeCb, buffer?: Buffer) => {
+			action: (cb: reader.ConsumeCb<State>, buffer?: Buffer) => {
 				this.packetBody = buffer.slice(0, this.packetLength);
-				cb(2);
+				cb(State.PROCESS);
 			}
 		},
 		{
-			state: 2,
+			state: State.PROCESS,
 			count: () => 0,
-			action: (cb: reader.ConsumeCb, buffer?: Buffer) => {
+			action: (cb: reader.ConsumeCb<State>, buffer?: Buffer) => {
 				var decipher = crypto.createDecipher(ALGORITHM, this.password);
 
 				try {
@@ -73,18 +77,18 @@ export class DecryptStream extends stream.Transform {
 					this.push(decrypted);
 					this.push(finalDecrypted);
 
-					cb(0);
+					cb(State.READ_LEN);
 				} catch (e) {
 					console.error('decrypt error:', e);
 
-					cb(3);
+					cb(State.EXIT);
 				}
 			}
 		},
 		{
-			state: 3,
+			state: State.EXIT,
 			count: () => 0,
-			action: (cb: reader.ConsumeCb, buffer?: Buffer) => {
+			action: (cb: reader.ConsumeCb<State>, buffer?: Buffer) => {
 				this.end();
 			}
 		}

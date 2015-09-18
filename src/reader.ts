@@ -1,23 +1,24 @@
-export interface ConsumeCb {
-	(target: number): void;
+export interface ConsumeCb<S> {
+	(target: S): void;
 }
 
-export interface ConsumeSpec {
-	state: number;
+export interface ConsumeSpec<S> {
+	state: S;
 	count: () => number;
-	action: (cb: ConsumeCb, buffer?: Buffer) => void;
+	action: (cb: ConsumeCb<S>, buffer?: Buffer) => void;
 }
 
-export class Reader {
-	private specs: Array<ConsumeSpec>;
+export class Reader<S> {
+	private specs: Array<ConsumeSpec<S>>;
 	private idle: boolean = true;
 
 	private buffers: Array<Buffer> = [];
 	private buffered: number = 0;
 
-	state: number = 0;
+	state: S;
 
-	constructor(specs: Array<ConsumeSpec>) {
+	constructor(initial: S, specs: Array<ConsumeSpec<S>>) {
+		this.state = initial;
 		this.specs = specs;
 	}
 
@@ -26,7 +27,7 @@ export class Reader {
 		this.buffered += buffer.length;
 	}
 
-	protected comsumeCb(target: number) {
+	protected comsumeCb(target: S) {
 		this.state = target;
 		this.idle = true;
 
@@ -65,10 +66,6 @@ export class Reader {
 				}
 			}
 		}
-	}
-
-	reset(): void {
-		this.state = 0;
 	}
 
 	remain(): Buffer {

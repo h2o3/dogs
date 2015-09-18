@@ -31,6 +31,10 @@ export function connect(options: ClientOptions) {
     return new TunnelClient(options);
 }
 
+enum State {
+    READ_KEY_LEN, READ_KEY, AUTH, FORWARD, AUTH_FAIL
+}
+
 export class TunnelServer {
     private options: ServerOptions;
 
@@ -80,27 +84,27 @@ export class TunnelServer {
 
         var proxy: net.Socket;
 
-        var consumer = new reader.Reader([
+        var consumer = new reader.Reader(State.READ_KEY_LEN, [
             {
-                state: 0,
+                state: State.READ_KEY_LEN,
                 count: () => 1,
-                action: (cb: reader.ConsumeCb, buffer?: Buffer) => {
+                action: (cb: reader.ConsumeCb<State>, buffer?: Buffer) => {
                     len = buffer.readUInt8(0);
-                    cb(1);
+                    cb(State.READ_KEY);
                 }
             },
             {
-                state: 1,
+                state: State.READ_KEY,
                 count: () => len,
-                action: (cb: reader.ConsumeCb, buffer?: Buffer) => {
+                action: (cb: reader.ConsumeCb<State>, buffer?: Buffer) => {
                     key = buffer.slice(0, len).toString();
-                    cb(2);
+                    cb(State.AUTH);
                 }
             },
             {
-                state: 2,
+                state: State.AUTH,
                 count: () => 0,
-                action: (cb: reader.ConsumeCb, buffer?: Buffer) => {
+                action: (cb: reader.ConsumeCb<State>, buffer?: Buffer) => {
                     this.options.checkAccessKey(key, (pass: boolean, password?: string) => {
                         console.log('auth result:', pass, ' with key:', key);
 
@@ -121,26 +125,26 @@ export class TunnelServer {
                             proxy.on('end', cleanup).on('close', cleanup);
                             upstream.on('end', cleanup).on('close', cleanup);
 
-                            cb(3);
+                            cb(State.FORWARD);
                         } else {
-                            cb(4);
+                            cb(State.AUTH_FAIL);
                         }
                     });
                 }
             },
             {
-                state: 3,
+                state: State.FORWARD,
                 count: () => Number.MAX_VALUE,
-                action: (cb: reader.ConsumeCb, buffer?: Buffer) => {
+                action: (cb: reader.ConsumeCb<State>, buffer?: Buffer) => {
                     // forward data to proxy
                     decipher.write(buffer);
-                    cb(3);
+                    cb(State.FORWARD);
                 }
             },
             {
-                state: 4,
+                state: State.AUTH_FAIL,
                 count: () => 0,
-                action: (cb: reader.ConsumeCb, buffer?: Buffer) => {
+                action: (cb: reader.ConsumeCb<State>, buffer?: Buffer) => {
                     downstream.end();
                 }
             }

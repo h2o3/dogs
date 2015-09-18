@@ -34,30 +34,37 @@ var EncryptStream = (function (_super) {
     return EncryptStream;
 })(stream.Transform);
 exports.EncryptStream = EncryptStream;
+var State;
+(function (State) {
+    State[State["READ_LEN"] = 0] = "READ_LEN";
+    State[State["READ_BODY"] = 1] = "READ_BODY";
+    State[State["PROCESS"] = 2] = "PROCESS";
+    State[State["EXIT"] = 3] = "EXIT";
+})(State || (State = {}));
 var DecryptStream = (function (_super) {
     __extends(DecryptStream, _super);
     function DecryptStream(password) {
         var _this = this;
         _super.call(this);
-        this.reader = new reader.Reader([
+        this.reader = new reader.Reader(State.READ_LEN, [
             {
-                state: 0,
+                state: State.READ_LEN,
                 count: function () { return 4; },
                 action: function (cb, buffer) {
                     _this.packetLength = buffer.readUInt32BE(0);
-                    cb(1);
+                    cb(State.READ_BODY);
                 }
             },
             {
-                state: 1,
+                state: State.READ_BODY,
                 count: function () { return _this.packetLength; },
                 action: function (cb, buffer) {
                     _this.packetBody = buffer.slice(0, _this.packetLength);
-                    cb(2);
+                    cb(State.PROCESS);
                 }
             },
             {
-                state: 2,
+                state: State.PROCESS,
                 count: function () { return 0; },
                 action: function (cb, buffer) {
                     var decipher = crypto.createDecipher(ALGORITHM, _this.password);
@@ -66,16 +73,16 @@ var DecryptStream = (function (_super) {
                         var finalDecrypted = decipher.final();
                         _this.push(decrypted);
                         _this.push(finalDecrypted);
-                        cb(0);
+                        cb(State.READ_LEN);
                     }
                     catch (e) {
                         console.error('decrypt error:', e);
-                        cb(3);
+                        cb(State.EXIT);
                     }
                 }
             },
             {
-                state: 3,
+                state: State.EXIT,
                 count: function () { return 0; },
                 action: function (cb, buffer) {
                     _this.end();

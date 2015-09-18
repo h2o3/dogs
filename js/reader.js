@@ -1,9 +1,9 @@
 var Reader = (function () {
-    function Reader(specs) {
+    function Reader(initial, specs) {
         this.idle = true;
         this.buffers = [];
         this.buffered = 0;
-        this.state = 0;
+        this.state = initial;
         this.specs = specs;
     }
     Reader.prototype.feed = function (buffer) {
@@ -45,9 +45,6 @@ var Reader = (function () {
                 }
             }
         }
-    };
-    Reader.prototype.reset = function () {
-        this.state = 0;
     };
     Reader.prototype.remain = function () {
         return Buffer.concat(this.buffers);
