@@ -4,6 +4,7 @@
   "description": "",
   "main": "js/server.js",
   "scripts": {
+    "start": "node js/server.js",
     "server": "node js/server.js",
     "client": "node js/client.js"
   },
