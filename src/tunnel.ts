@@ -62,12 +62,16 @@ export class TunnelServer {
         var proxy = net.connect(this.options.proxyPort, this.options.proxyHost, () => {
             proxy.pipe(downstream);
             upstream.pipe(proxy);
+            
+            console.log('proxy connected');
         });
         proxy.on('error', (e) => console.log('proxy error:', e));
 
         var cleanup = () => {
             if (proxy.writable) proxy.end();
             if (downstream.writable) downstream.end();
+            
+            console.log('disconnect');
         };
         proxy.on('end', cleanup).on('close', cleanup);
         upstream.on('end', cleanup).on('close', cleanup);
@@ -101,6 +105,8 @@ export class TunnelClient {
         });
 
         request.on('upgrade', (resp: http.ClientResponse, tunnel: net.Socket, head: Buffer) => {
+            console.log("upgrade success:", resp.headers);
+            
             tunnel.on('error', (e) => console.log('downstream error:', e));
 
             if (resp.headers.upgrade != 'DOGS') tunnel.end();
@@ -114,17 +120,21 @@ export class TunnelClient {
     }
 
     protected handleClient(socket: net.Socket) {
-        var address = socket.remoteAddress + ":" + socket.remotePort;
+        console.log("client online");
 
         var upstream = this.bindTransport(socket);
 
         var cleanup = () => {
             if (upstream.writable) upstream.end();
             if (socket.writable) socket.end();
+            
+            console.log('bye');
         }
 
-        socket.on('close', cleanup);
+        socket.on('end', cleanup).on('close', cleanup);
+        upstream.on('end', cleanup).on('close', cleanup);
 
+        var address = socket.remoteAddress + ":" + socket.remotePort;
         upstream.on('error', (e) => console.log('upstream for [' + address + '] error:', e));
         socket.on('error', (e) => console.log('socket @ [' + address + '] error:', e));
     }
