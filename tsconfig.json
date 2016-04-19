@@ -8,8 +8,6 @@
         "src/tunnel.ts",
 		"src/server.ts",
 		"src/client.ts",
-		"src/secure.ts",
-		"src/reader.ts",
 		
 		"typings/node/node.d.ts",
 		"typings/socksv5/socksv5.d.ts"
