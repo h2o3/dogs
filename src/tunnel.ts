@@ -44,7 +44,7 @@ export class TunnelServer {
                     'Connection: Upgrade\r\n' +
                     '\r\n');
 
-                this.handleClient(socket, socket);
+                this.handleClient(socket, head);
             } else {
                 socket.end();
             }
@@ -55,26 +55,23 @@ export class TunnelServer {
         this.server.listen.call(this.server, port, host);
     }
 
-    protected handleClient(upstream: stream.Readable, downstream: stream.Writable) {
-        upstream.on('error', (e) => console.log('upstream error:', e));
-        downstream.on('error', (e) => console.log('downstream error:', e))
+    protected handleClient(socket: net.Socket, head: Buffer) {
+        socket.on('error', (e) => console.log('socket error:', e));
 
         var proxy = net.connect(this.options.proxyPort, this.options.proxyHost, () => {
-            proxy.pipe(downstream);
-            upstream.pipe(proxy);
-            
-            console.log('proxy connected');
+            proxy.write(head);
+
+            proxy.pipe(socket);
+            socket.pipe(proxy);
         });
         proxy.on('error', (e) => console.log('proxy error:', e));
 
         var cleanup = () => {
             if (proxy.writable) proxy.end();
-            if (downstream.writable) downstream.end();
-            
-            console.log('disconnect');
+            if (socket.writable) socket.end();
         };
         proxy.on('end', cleanup).on('close', cleanup);
-        upstream.on('end', cleanup).on('close', cleanup);
+        socket.on('end', cleanup).on('close', cleanup);
     }
 }
 
@@ -93,7 +90,7 @@ export class TunnelClient {
         this.listenServer.listen(port, host);
     }
 
-    protected bindTransport(socket: net.Socket): stream.Writable {
+    protected handleClient(socket: net.Socket) {
         var request = https.request({
             host: this.options.serverHost,
             port: this.options.serverPort,
@@ -105,9 +102,7 @@ export class TunnelClient {
         });
 
         request.on('upgrade', (resp: http.ClientResponse, tunnel: net.Socket, head: Buffer) => {
-            console.log("upgrade success:", resp.headers);
-            
-            tunnel.on('error', (e) => console.log('downstream error:', e));
+            tunnel.on('error', (e) => console.log('tunnel error:', e));
 
             if (resp.headers.upgrade != 'DOGS') tunnel.end();
 
@@ -116,26 +111,22 @@ export class TunnelClient {
         });
         request.flushHeaders();
 
-        return request;
-    }
-
-    protected handleClient(socket: net.Socket) {
-        console.log("client online");
-
-        var upstream = this.bindTransport(socket);
-
-        var cleanup = () => {
-            if (upstream.writable) upstream.end();
-            if (socket.writable) socket.end();
-            
-            console.log('bye');
+        var cleanup = function () {
+            if (request.writable) request.end();
+            if (this == socket) {
+                if (socket.writable) socket.end();
+            } else {
+                setTimeout(function () { if (socket.writable) socket.end(); }, 1000);
+            }
         }
 
         socket.on('end', cleanup).on('close', cleanup);
-        upstream.on('end', cleanup).on('close', cleanup);
+        request.on('end', cleanup).on('close', cleanup);
 
         var address = socket.remoteAddress + ":" + socket.remotePort;
-        upstream.on('error', (e) => console.log('upstream for [' + address + '] error:', e));
+        request.on('error', (e) => console.log('request for [' + address + '] error:', e));
         socket.on('error', (e) => console.log('socket @ [' + address + '] error:', e));
     }
 }
+
+http.globalAgent.maxSockets = Infinity;

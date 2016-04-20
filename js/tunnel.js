@@ -1,7 +1,6 @@
 "use strict";
 var net = require('net');
 var http = require('http');
-var https = require('https');
 function createServer(options) {
     return new TunnelServer(options);
 }
@@ -27,7 +26,7 @@ var TunnelServer = (function () {
                     'Upgrade: DOGS\r\n' +
                     'Connection: Upgrade\r\n' +
                     '\r\n');
-                _this.handleClient(socket, socket);
+                _this.handleClient(socket, head);
             }
             else {
                 socket.end();
@@ -37,24 +36,22 @@ var TunnelServer = (function () {
     TunnelServer.prototype.listen = function (port, host) {
         this.server.listen.call(this.server, port, host);
     };
-    TunnelServer.prototype.handleClient = function (upstream, downstream) {
-        upstream.on('error', function (e) { return console.log('upstream error:', e); });
-        downstream.on('error', function (e) { return console.log('downstream error:', e); });
+    TunnelServer.prototype.handleClient = function (socket, head) {
+        socket.on('error', function (e) { return console.log('socket error:', e); });
         var proxy = net.connect(this.options.proxyPort, this.options.proxyHost, function () {
-            proxy.pipe(downstream);
-            upstream.pipe(proxy);
-            console.log('proxy connected');
+            proxy.write(head);
+            proxy.pipe(socket);
+            socket.pipe(proxy);
         });
         proxy.on('error', function (e) { return console.log('proxy error:', e); });
         var cleanup = function () {
             if (proxy.writable)
                 proxy.end();
-            if (downstream.writable)
-                downstream.end();
-            console.log('disconnect');
+            if (socket.writable)
+                socket.end();
         };
         proxy.on('end', cleanup).on('close', cleanup);
-        upstream.on('end', cleanup).on('close', cleanup);
+        socket.on('end', cleanup).on('close', cleanup);
     };
     return TunnelServer;
 }());
@@ -67,8 +64,8 @@ var TunnelClient = (function () {
     TunnelClient.prototype.listen = function (port, host) {
         this.listenServer.listen(port, host);
     };
-    TunnelClient.prototype.bindTransport = function (socket) {
-        var request = https.request({
+    TunnelClient.prototype.handleClient = function (socket) {
+        var request = http.request({
             host: this.options.serverHost,
             port: this.options.serverPort,
             method: 'GET',
@@ -78,33 +75,33 @@ var TunnelClient = (function () {
             }
         });
         request.on('upgrade', function (resp, tunnel, head) {
-            console.log("upgrade success:", resp.headers);
-            tunnel.on('error', function (e) { return console.log('downstream error:', e); });
+            tunnel.on('error', function (e) { return console.log('tunnel error:', e); });
             if (resp.headers.upgrade != 'DOGS')
                 tunnel.end();
             socket.pipe(tunnel);
             tunnel.pipe(socket);
         });
         request.flushHeaders();
-        return request;
-    };
-    TunnelClient.prototype.handleClient = function (socket) {
-        console.log("client online");
-        var upstream = this.bindTransport(socket);
         var cleanup = function () {
-            if (upstream.writable)
-                upstream.end();
-            if (socket.writable)
-                socket.end();
-            console.log('bye');
+            if (request.writable)
+                request.end();
+            if (this == socket) {
+                if (socket.writable)
+                    socket.end();
+            }
+            else {
+                setTimeout(function () { if (socket.writable)
+                    socket.end(); }, 1000);
+            }
         };
         socket.on('end', cleanup).on('close', cleanup);
-        upstream.on('end', cleanup).on('close', cleanup);
+        request.on('end', cleanup).on('close', cleanup);
         var address = socket.remoteAddress + ":" + socket.remotePort;
-        upstream.on('error', function (e) { return console.log('upstream for [' + address + '] error:', e); });
+        request.on('error', function (e) { return console.log('request for [' + address + '] error:', e); });
         socket.on('error', function (e) { return console.log('socket @ [' + address + '] error:', e); });
     };
     return TunnelClient;
 }());
 exports.TunnelClient = TunnelClient;
+http.globalAgent.maxSockets = Infinity;
 //# sourceMappingURL=tunnel.js.map

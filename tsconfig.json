@@ -10,6 +10,6 @@
 		"src/client.ts",
 		
 		"typings/node/node.d.ts",
-		"typings/socksv5/socksv5.d.ts"
+		"typings/node/proxy.d.ts"
 	]
 }
